@@ -68,6 +68,8 @@ services:
       - "443:443"
     environment:
       SERVER_ADDRESS: ${SERVER_ADDRESS:?définir SERVER_ADDRESS dans .env}
+      # Adresse IP présentée aux navigateurs qui n'envoient pas de SNI.
+      TLS_DEFAULT_SNI: ${TLS_DEFAULT_SNI:-${SERVER_ADDRESS}}
     volumes:
       - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
       - caddy_data:/data

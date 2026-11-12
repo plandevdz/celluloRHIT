@@ -4,6 +4,10 @@
 # Le port 80 redirige automatiquement vers 443.
 {
 	skip_install_trust
+	# Un navigateur qui ouvre https://<IP> n'envoie pas de nom (SNI) ; dans
+	# Docker, l'adresse locale vue par Caddy est celle du conteneur. On
+	# indique donc explicitement le certificat à présenter.
+	default_sni {$TLS_DEFAULT_SNI}
 }
 
 {$SERVER_ADDRESS} {
