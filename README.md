@@ -72,6 +72,19 @@ Par rapport à la v1 : cinq rôles cumulables, cinq champs pour annoncer une arr
 4. Mutation, démission et traitements à échéance ; valider les dates, les conflits de poste et la séparation sortie/coupure/retour.
 5. Piloter sur un site avec données fictives, tester imprimante et douchette réelles ; reprise SharePoint à blanc, rapprochement, sauvegarde restaurée et bascule maîtrisée.
 
+### Avancement (12/11/2026)
+| Étape | Implémenté | Testé automatiquement | Vérifié dans le navigateur | À valider sur site |
+|---|---|---|---|---|
+| 1. Socle (rôles, références, HTTPS, Docker, sauvegarde) | oui | oui | oui | restauration Docker complète, CA conservée |
+| 2. Tranche verticale arrivée → remise (R01–R06) | oui | oui | oui | impression papier, douchette, e-mails réels |
+| Lot 1 : périmètre des données, présence réelle, preuves de fin de tâche, avis exacts | oui | oui | oui | — |
+| 3. Excel du personnel (R08) | oui | oui | oui | classeur RH réel |
+| 3. QR et inventaire (R07), licences, véhicules (R11, R12), reprise Exchange/SharePoint (R13) | non | — | — | — |
+| 4. Mutation, démission (R09, R10) | non | — | — | — |
+| 5. Pilote | non | — | — | — |
+
+Le détail par scénario est dans 05-Recette.md. Prochaine tranche prévue : envoi Exchange vers une boîte de test avec reprise sur erreur, puis étiquettes QR et campagnes d’inventaire.
+
 Pour chaque tranche : livrer code, migrations, tests d’intégration, données fictives, démonstration dans un navigateur sur poste Windows et écarts restants. Ne pas activer les anciens flux ni envoyer de vrais mails pendant les tests. Ne pas intégrer de secrets dans le projet. Avant production seulement : confirmer matériel, IP/DNS, expéditeur Exchange, bibliothèque documentaire, cibles de sauvegarde et destinataires d’escalade.
 
 Sources infrastructure : https://www.debian.org/releases/stable/ • https://man.openbsd.org/sshd_config • https://learn.microsoft.com/windows-server/administration/openssh/openssh_keymanagement

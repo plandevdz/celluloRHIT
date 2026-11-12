@@ -17,3 +17,35 @@ Préparer un utilisateur par rôle et un IT + FORMATION ; deux sites et deux loc
 | R12 | Attribuer le dernier siège logiciel à deux personnes en parallèle, puis en libérer un ; arriver à échéance assurance/vidange. | Une seule attribution initiale ; siège libéré à la restitution ; les alertes véhicule vont au RH et le renouvellement conserve l’historique. |
 | R13 | Couper Exchange et SharePoint pendant la remise ; fermer l’onglet du navigateur ; redémarrer le conteneur worker. | Garde conservée, file d’attente visible, archivage repris, aucune fausse signature ou livraison de mail annoncée. |
 | R14 | GRAPHISTE tente d’exporter les pièces RH (y compris en appelant directement l’URL de l’API) ; restaurer le serveur (volumes Docker) sur une autre machine en environnement isolé. | Refus côté API ; reprise des données et contrôles sans expédier les notifications de production. |
+
+## Contrôles ajoutés au lot 1 (fiabilisation de l'arrivée)
+
+| ID | Action | Preuve attendue |
+|---|---|---|
+| L1 | Dossier avec carte de visite, note RH, blocage et observation IT. Le GRAPHISTE ouvre **son** dossier (accès autorisé) et sa fiche salarié ; il appelle aussi directement les URL des comptes, des biens et des décharges. | Il voit sa carte et les coordonnées utiles. Le JSON ne contient ni note RH, ni observation ou blocage IT, ni historique des postes, ni autres dossiers, ni décharges. Les accès directs renvoient 403. Même logique pour FORMATION ; un IT + FORMATION cumule les deux vues. |
+| L2 | Recrue présente lundi, formée mardi, PC remis mercredi ; double clic sur « Confirmer l'arrivée » ; correction de date ; clôture d'une autre arrivée sans confirmation. | Comptée active dès lundi, dossier encore ouvert ; un seul événement ; correction motivée et tracée ; la clôture ne confirme rien et la fiche est signalée « présence à confirmer ». |
+| L3 | Remise d'une SIM rattachée à la tâche PC ; remise « téléphone + portable » avec préférence fixe ; « déjà détenu » ; « exception ». | La SIM ne solde pas le PC ; motif de substitution exigé quel que soit l'ordre des lignes ; « déjà détenu » vérifié sur une affectation active du bon type ; l'exception exige un motif et ne crée aucune affectation. |
+| L4 | Arrivée avec carte de visite sans aucun GRAPHISTE actif, en mode journal. | « Dossier visible par … — aucun e-mail envoyé (mode test) » ; équipe sans destinataire signalée en Administration ; arrivée créée ; « consigné » jamais compté comme « envoyé ». |
+| RP | Sur une **VM de test distincte de la production** : `backup.sh`, puis `restore-isole.sh` (projet `cellulo-restore`, volumes neufs). | Dossier, rôles (dont IT + FORMATION), empreintes du PDF et du scan identiques ; empreinte du certificat racine Caddy identique avant/après ; mode d'envoi « journal ». Refus sur cible non vide ou de production ; arrêt avant démarrage en cas d'échec. |
+
+## État au 12/11/2026 (branche `lot1-fiabilisation-lot2-excel`)
+
+Légende : **auto** = test automatisé exécuté et réussi (PostgreSQL 17 réel) ; **nav** = vérifié dans un navigateur sur une instance isolée avec données fictives ; **site** = reste à valider sur site.
+
+| ID | Implémenté | Testé auto | Vérifié nav | À valider sur site |
+|---|---|---|---|---|
+| R01 | oui | oui (`parcours::r01`, `lot1::avis_honnetes`) | oui | envoi Exchange réel (non livré) |
+| R02 | oui | oui (`parcours::r02_r06`, `lot1::preuve_de_remise`) | oui : remise portable + SIM, motif, contenu du PDF relu | impression A4 papier, douchette réelle |
+| R03 | oui | oui (`parcours::r03`) | partiel : session réalisée avant le PC ; la prise simultanée n'est testée qu'automatiquement | — |
+| R04 | oui | oui (`parcours::r04`) | non | — |
+| R05 | oui | oui (`parcours::r05`) | oui : DEM après clôture, vue Graphiste | — |
+| R06 | oui | oui (`parcours::r02_r06`) | oui (session du 12/11 matin) | signature et scan réels |
+| R07 | **non** (prochaine tranche) | — | — | — |
+| R08 | oui | oui (`lot2_excel`, 2 tests) | oui : aperçu, décisions, application, export | classeur RH réel, ouverture dans Excel et LibreOffice |
+| R09 à R12 | **non** | — | — | — |
+| R13 | partiel : mode journal seul ; Exchange et SharePoint non raccordés | — | — | — |
+| R14 | refus API : oui ; restauration : voir RP | oui (`parcours::r14`, `lot1::graphiste_autorise…`, `lot2_excel::export_droits…`) | oui : 403 en appel direct depuis le navigateur | restauration Docker complète |
+| L1 à L4 | oui | oui (`lot1`, 4 tests) | oui (L1 : Formation et Graphiste ; L2 à L4) | — |
+| RP | `backup.sh` chiffré (GPG à clé publique, code 3 si non configuré) ; `restore-isole.sh` (VM de test, garde-fous, arrêt avant démarrage) | `test-backup.sh` (21 contrôles) et `test-restore.sh` (22 contrôles) avec faux docker : **oui** ; restauration PostgreSQL + documents : **exécutée et réussie** hors Docker | — | **recette complète sur VM avec vrai Docker : NON EXÉCUTÉE** (sauvegarde → restauration → dossier, rôles, empreintes PDF/scan, certificat racine Caddy avant/après) |
+
+Non validé à ce jour : le rendu des noms arabes dans les PDF (les glyphes sont présents, mais la liaison et le sens de lecture ne sont pas traités) et l'impression papier. La présence d'un en-tête PDF ne vaut pas validation.

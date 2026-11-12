@@ -16,6 +16,7 @@ import {
   roleLabel,
   sessionStatusLabel,
 } from "../labels";
+import { ConfirmArrivalDialog } from "./TaskDialogs";
 
 export default function EmployeePage() {
   const { id = "" } = useParams();
@@ -23,7 +24,7 @@ export default function EmployeePage() {
   const location = useLocation();
   const detail = useLoad(() => api<any>(`/employees/${id}`), [id]);
   const accounts = useLoad(() => (has("IT", "RH", "ADMIN") ? api<any[]>(`/employees/${id}/accounts`) : Promise.resolve([])), [id]);
-  const [dialog, setDialog] = useState<null | "request" | "edit">(null);
+  const [dialog, setDialog] = useState<null | "request" | "edit" | "arrival">(null);
 
   useEffect(() => {
     if (location.hash === "#comptes" && accounts.data) document.getElementById("comptes")?.scrollIntoView();
@@ -31,7 +32,8 @@ export default function EmployeePage() {
 
   if (detail.loading && !detail.data) return <Loading />;
   if (detail.error) return <ErrorBox error={detail.error} onRetry={detail.reload} />;
-  const { employee: e, positions, cases, holdings, trainings } = detail.data;
+  const { employee: e, positions, cases, holdings, trainings, contact, scope } = detail.data;
+  const full = scope === "complet";
   const isIt = has("IT", "ADMIN");
   const isHr = has("RH", "ADMIN");
 
@@ -46,11 +48,21 @@ export default function EmployeePage() {
         subtitle={
           <>
             <Badge status={e.status} label={employeeStatusLabel[e.status]} /> · {e.job_title ?? "poste ?"} · {e.site_name ?? "site ?"}
-            {e.matricule ? ` · matricule ${e.matricule}` : " · sans matricule"}
+            {full && (e.matricule ? ` · matricule ${e.matricule}` : " · sans matricule")}
           </>
         }
         actions={
           <>
+            {isHr && e.status === "a_venir" && (
+              <button className="btn btn-primary" onClick={() => setDialog("arrival")}>
+                Confirmer l'arrivée
+              </button>
+            )}
+            {isHr && e.status === "actif" && e.actual_arrival && (
+              <button className="btn" onClick={() => setDialog("arrival")}>
+                Corriger la date d'arrivée
+              </button>
+            )}
             {isHr && e.status !== "sorti" && (
               <button className="btn btn-primary" onClick={() => setDialog("request")}>
                 Nouvelle demande
@@ -86,8 +98,27 @@ export default function EmployeePage() {
               <dd>{e.department ?? "—"}</dd>
               <dt>Manager</dt>
               <dd>{e.manager ?? "—"}</dd>
-              <dt>Arrivée</dt>
-              <dd>{e.actual_arrival ? `${fmtDate(e.actual_arrival)} (réelle)` : `${fmtDate(e.planned_arrival)} (prévue)`}</dd>
+              {full && (
+                <>
+                  <dt>Arrivée</dt>
+                  <dd>
+                    {e.actual_arrival ? `${fmtDate(e.actual_arrival)} (présence confirmée)` : `${fmtDate(e.planned_arrival)} (prévue, présence non confirmée)`}
+                    {e.arrival_confirmed_by_name && (
+                      <div className="small muted">
+                        par {e.arrival_confirmed_by_name} le {fmtDateTime(e.arrival_confirmed_at)}
+                      </div>
+                    )}
+                  </dd>
+                </>
+              )}
+              {contact && (
+                <>
+                  <dt>Email pro</dt>
+                  <dd>{contact.email_pro ?? "non consigné"}</dd>
+                  <dt>Mobile pro</dt>
+                  <dd>{contact.mobile ?? "aucune ligne remise"}</dd>
+                </>
+              )}
               {e.exit_date && (
                 <>
                   <dt>Sortie</dt>
@@ -109,6 +140,7 @@ export default function EmployeePage() {
             )}
           </Section>
 
+          {full && (
           <Section title="Biens détenus">
             {holdings.length === 0 ? (
               <Empty>Aucun bien détenu.</Empty>
@@ -146,7 +178,9 @@ export default function EmployeePage() {
               </table>
             )}
           </Section>
+          )}
 
+          {(trainings.length > 0 || isHr) && (
           <Section title="Formations">
             {trainings.length === 0 ? (
               <Empty>Aucune formation.</Empty>
@@ -161,6 +195,7 @@ export default function EmployeePage() {
               </ul>
             )}
           </Section>
+          )}
         </div>
 
         <div className="stack">
@@ -191,6 +226,16 @@ export default function EmployeePage() {
       </div>
 
       {dialog === "request" && <RequestDialog employee={e} cases={cases} onClose={() => setDialog(null)} />}
+      {dialog === "arrival" && (
+        <ConfirmArrivalDialog
+          employee={e}
+          onClose={() => setDialog(null)}
+          onDone={() => {
+            setDialog(null);
+            detail.reload();
+          }}
+        />
+      )}
       {dialog === "edit" && <EditIdentityDialog employee={e} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); detail.reload(); }} />}
     </>
   );

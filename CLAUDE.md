@@ -18,6 +18,8 @@ export DATABASE_URL=postgres://cellulo:devpass@127.0.0.1:55432/cellulo
 cargo test --workspace                       # domaine + tests d'intégration (DATABASE_URL obligatoire)
 cargo test -p domain                         # règles pures, sans base
 cargo test -p server --test parcours r03     # un seul scénario de recette
+cargo test -p server --test lot1             # périmètre, présence, preuves, avis
+cargo test -p server --test lot2_excel       # import/export Excel
 cargo run -p server -- serve                 # API + web sur :8080 (migrations au démarrage)
 cargo run -p server -- worker                # avis + PDF en attente (processus séparé)
 DEMO_PASSWORD=... cargo run -p server -- seed-demo     # données FICTIVES, base vide uniquement
@@ -44,13 +46,19 @@ En local, `serve` a besoin de `WEB_DIR=web/dist`, `COOKIE_SECURE=false` et `PUBL
 1. **Une transaction par commande**, qui écrit dans la même transaction la mutation métier, `audit::record` et, si une équipe doit être prévenue, `audit::enqueue` (outbox). Jamais d'appel réseau, de PDF ni d'impression dans la transaction : le PDF est lancé après commit (`spawn_pdf`) et le worker rattrape les manqués.
 2. **Idempotence** : les créations sensibles lisent `Idempotency-Key` (`idempotency::begin`/`finish`, dans la transaction). La même clé avec le même corps renvoie la même réponse ; une autre clé est refusée avec 422. `POST /arrivals` l'exige. Côté web, la clé est générée une fois par formulaire (`newKey()`) et réutilisée en cas de nouvel essai.
 3. **Concurrence** : prise atomique par `UPDATE … WHERE status='a_faire' RETURNING`, sinon 409 avec le détenteur réel. `SELECT … FOR UPDATE` sur les ressources remises. Contrôle de `version` (412 si périmée) sur les saisies concurrentes.
-4. **Autorisation côté API à chaque handler** : `user.require(&[Role::…])`. Pour la lecture d'un dossier ou d'un salarié : `can_view_case` / `can_view_employee` (GRAPHISTE et FORMATION ne voient que leurs dossiers ; les notes RH sont masquées hors RH).
+4. **Autorisation côté API à chaque handler** : `user.require(&[Role::…])`. Pour la lecture d'un dossier ou d'un salarié : `can_view_case` / `can_view_employee`, puis **filtrage des données renvoyées** (pas seulement des boutons) : hors RH/ADMIN, `GET /cases/{ref}` ne renvoie que les tâches et besoins des rôles de l'utilisateur, sans note RH, autres dossiers, suivi des avis ni historique étranger ; les décharges sont réservées à RH/ADMIN/IT ; `GET /employees/{id}` en vue « equipe » (GRAPHISTE/FORMATION) n'a ni historique des postes, ni biens, ni matricule. Tout nouveau champ doit être classé dans ce périmètre et couvert par un test d'**accès autorisé** (voir `tests/lot1.rs`).
 5. **Erreurs** : `AppError` → JSON `{error, message, field?, detail?}`. Les violations SQL 23505, 23P01 et 23514 deviennent des 409. Les messages sont rédigés pour l'utilisateur, en français.
 6. Les commandes non-GET doivent porter l'en-tête `x-cellulo-client` (protection CSRF, en plus du cookie `SameSite=Strict`). `api.ts` l'ajoute ; les tests aussi (`tests/common/mod.rs`).
 
+### Fin de tâche, présence, import
+
+- `POST /tasks/{id}/complete` exige une résolution : `remis` (lignes de remise du dossier de la bonne catégorie et quantité : `NeedCategory::matches_item`), `deja_detenu` (affectations actives vérifiées), `exception` (motif obligatoire, jamais comptée comme remise) ou `realise` (compte consigné pour email/Xena/Intelix). Les formations se soldent via leur session. Les tâches terminées avant la migration 0002 ont `resolution` NULL et ne doivent pas être requalifiées.
+- `POST /employees/{id}/arrival` confirme la présence (statut `actif`), indépendamment de la clôture du dossier ; idempotent ; correction motivée.
+- Import Excel (`routes/imports.rs`, `personnel_xlsx.rs`) : aperçu sans écriture métier → décisions → `commit` transactionnel (SAVEPOINT par ligne). Ne jamais rapprocher sur le seul nom ; jamais d'arrivée, de tâche ni d'avis à l'import. Un classeur (SHA-256) n'est appliqué qu'une fois.
+
 ### Avis et documents
 
-L'outbox cible `target_roles[]` et/ou `target_user_ids[]`. Le worker résout les destinataires actifs et déduplique par adresse : un utilisateur IT + FORMATION reçoit un seul avis. En V1, seul `MAIL_MODE=journal` existe : rien n'est envoyé, tout est consigné dans `deliveries`. L'adaptateur Microsoft Graph reste à écrire. Les décharges sont stockées sous `DATA_DIR/dossiers/<REF>/<remises|restitutions>/<MVT>/v1-original.pdf`. Les scans sont contrôlés par signature binaire et versionnés, jamais écrasés. Le statut `signe` exige un scan.
+L'outbox cible `target_roles[]` et/ou `target_user_ids[]`. Le worker résout les destinataires actifs, déduplique par adresse (un utilisateur IT + FORMATION reçoit un seul avis) et note dans `missing_roles` les équipes sans destinataire. En V1, seul `MAIL_MODE=journal` existe : rien n'est envoyé, tout est consigné dans `deliveries`. L'interface ne doit jamais présenter « consigné » comme « envoyé » : utiliser `visibilityText` (labels.ts) et les compteurs `logged` / `accepted` / `pending` / `failed`. L'adaptateur Microsoft Graph reste à écrire. Les décharges sont stockées sous `DATA_DIR/dossiers/<REF>/<remises|restitutions>/<MVT>/v1-original.pdf`. Les scans sont contrôlés par signature binaire et versionnés, jamais écrasés. Le statut `signe` exige un scan.
 
 ## Invariants métier (rappel, détails dans les cahiers)
 
@@ -63,4 +71,8 @@ L'outbox cible `target_roles[]` et/ou `target_user_ids[]`. Le worker résout les
 
 ## Git
 
-Dépôt : https://github.com/plandevdz/celluloRHIT. L'utilisateur travaille directement sur `main` (pas de branches).
+Dépôt : https://github.com/plandevdz/celluloRHIT (potentiellement public : aucun secret, vrai fichier du personnel ni scan réel). Suivre la consigne de chaque demande : les premières tranches ont été poussées sur `main` ; les lots 1 et 2 ont été développés sur la branche `lot1-fiabilisation-lot2-excel`, sans pousser sur `main` ni fusionner. Ne jamais déployer ni se connecter au serveur de production sans demande explicite.
+
+## Environnement de développement (poste Windows)
+
+Docker Desktop peut être indisponible : un PostgreSQL 17 portable (binaires EDB, `initdb`/`pg_ctl` sur le port 55432) suffit pour les tests. Le disque C: est presque plein : compiler avec `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` réduit `target/` à ~1 Go ; un `celluloplast.exe` en cours d'exécution bloque la recompilation (arrêter les serveurs locaux d'abord).

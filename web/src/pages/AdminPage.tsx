@@ -268,15 +268,16 @@ function NotificationsTab() {
   return (
     <Section title="Avis émis et remises">
       <Notice kind="info">
-        Mode actuel : <strong>journal</strong> — les avis sont consignés ici et ne partent pas par mail. L'envoi Exchange Online sera activé
-        au raccordement Microsoft Graph.
+        Mode actuel : <strong>journal (test)</strong> — les avis sont consignés ici, <strong>aucun e-mail n'est envoyé</strong>. « Consigné »
+        ne signifie pas « reçu ». L'envoi Exchange Online sera activé au raccordement Microsoft Graph.
       </Notice>
       <div className="filters">
         <label className="field">
           <span className="field-label">Filtrer</span>
           <select value={status} onChange={(e) => setStatus(e.target.value)}>
             <option value="">Tous</option>
-            <option value="erreur">Routage en erreur</option>
+            <option value="anomalie">Anomalies de routage (équipe sans destinataire)</option>
+            <option value="erreur">Aucun destinataire du tout</option>
             <option value="en_attente">En attente</option>
             <option value="a_verifier">À vérifier</option>
             <option value="echec">Échec</option>
@@ -306,6 +307,11 @@ function NotificationsTab() {
                   <td>
                     {n.subject}
                     {n.outbox_error && <div className="small" style={{ color: "var(--danger)" }}>{n.outbox_error}</div>}
+                    {n.missing_roles?.length > 0 && (
+                      <div className="small" style={{ color: "var(--danger)" }}>
+                        Aucun utilisateur actif pour : {n.missing_roles.map((r: string) => roleLabel[r] ?? r).join(", ")}
+                      </div>
+                    )}
                   </td>
                   <td className="small">{n.target}</td>
                   <td className="small">

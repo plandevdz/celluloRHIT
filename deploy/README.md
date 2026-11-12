@@ -73,19 +73,134 @@ Les migrations SQL s'appliquent au démarrage de `app`. Les navigateurs ouverts 
 
 ## Sauvegarde et restauration
 
-`deploy/backup.sh` produit un dump PostgreSQL, une archive des documents et leurs empreintes SHA-256. Planifiez-le chaque jour (cron root), puis copiez le résultat **hors de la machine**, chiffré (par exemple `gpg --symmetric` puis `rsync` vers le serveur de sauvegarde). Un disque unique n'est pas une sauvegarde.
+### Ce que couvre `deploy/backup.sh`
 
-Restauration sur une autre machine (environnement isolé, sans envoi de mails) :
+| Élément | Fichier produit | Remarque |
+|---|---|---|
+| Base PostgreSQL : dossiers, rôles, audit, références, empreintes des documents | `cellulo-<date>.dump.gpg` | `pg_dump` en format custom, chiffré |
+| Décharges PDF originales, scans signés | `documents-<date>.tar.gz.gpg` | volume `celluloplast_documents`, chiffré |
+| Configuration `.env` + autorité de certification interne de Caddy (certificat racine et **clé privée**) | `secrets-<date>.tar.gz.gpg` | **toujours chiffré, jamais écrit en clair**. Sans cette CA, une restauration crée une nouvelle autorité et tous les PC Windows doivent réinstaller le certificat racine. |
+| Empreintes SHA-256 des fichiers ci-dessus | `sha256-<date>.txt` | à vérifier avant restauration |
+| Code et image Docker | — | reconstruits depuis Git (`docker compose up -d --build`) |
+
+**Chiffrement dès l'écriture, à clé publique.** Les flux passent de `pg_dump` ou `tar` directement à `gpg`, sans fichier intermédiaire en clair. Le serveur ne détient que la **clé publique** de récupération ; la **clé privée** reste hors du serveur (coffre de la DSI). Une personne qui copierait les sauvegardes depuis le serveur ne pourrait donc pas les déchiffrer.
+
+**Sans clé configurée**, le script :
+- ne crée **aucune** archive de secrets ;
+- écrit la base et les documents en clair ;
+- affiche « SAUVEGARDE INCOMPLÈTE » et se termine avec le **code 3**.
+
+Un cron doit traiter ce code comme une alerte. `--sans-secrets` exclut volontairement `.env` et la CA : sauvegarde « partielle », code 0.
+
+#### Mettre en place la clé de récupération (une fois)
+
+Sur un **poste d'administration**, pas sur le serveur (Linux avec gnupg, ou Windows avec Gpg4win) :
 
 ```bash
-sudo docker compose up -d db
-sudo docker compose exec -T db pg_restore -U cellulo -d cellulo --clean --if-exists < cellulo-AAAAMMJJ-HHMMSS.dump
-sudo docker run --rm -v celluloplast_documents:/data -v "$PWD":/backup debian:trixie-slim \
-  sh -c 'tar xzf /backup/documents-AAAAMMJJ-HHMMSS.tar.gz -C /data && chown -R 10001 /data'
-sudo docker compose up -d
+gpg --quick-generate-key "Celluloplast sauvegarde (DSI)" rsa4096 encr 5y        # phrase de passe forte
+gpg --list-keys --with-colons "Celluloplast sauvegarde" | awk -F: '$1=="fpr"{print $10; exit}'   # empreinte
+gpg --armor --export <EMPREINTE> > backup-pubkey.asc                             # partie PUBLIQUE
+gpg --armor --export-secret-keys <EMPREINTE> > cle-privee-sauvegarde.asc         # à ranger HORS LIGNE (coffre)
+gpg --output revocation.asc --gen-revoke <EMPREINTE>                             # certificat de révocation, au coffre
 ```
 
-Contrôlez ensuite les références, les rôles, les empreintes des documents et la file des avis en attente avant toute remise en service.
+Sur le serveur, ne copiez **que** la partie publique :
+
+```bash
+sudo install -m 644 backup-pubkey.asc /etc/celluloplast/backup-pubkey.asc
+echo 'BACKUP_GPG_RECIPIENT=<EMPREINTE>' | sudo tee /etc/celluloplast/backup.conf
+sudo chmod 600 /etc/celluloplast/backup.conf
+sudo deploy/backup.sh /var/backups/celluloplast; echo "code=$?"   # attendu : « Sauvegarde COMPLÈTE », code=0
+```
+
+Le script refuse de démarrer si l'empreinte ne correspond pas à la clé publique fournie. Planifiez-le chaque jour (cron root) et copiez le résultat **hors de la machine** (`rsync -a /var/backups/celluloplast/ sauvegarde@serveur-de-sauvegarde:/celluloplast/`). Un disque unique n'est pas une sauvegarde. Aucun de ces fichiers ne doit être déposé dans Git.
+
+Test automatisé, avec des secrets fictifs et un faux `docker` : `bash deploy/tests/test-backup.sh`. Il vérifie le chiffrement, l'absence de tout secret en clair sur disque, le déchiffrement avec la seule clé privée, le code 3 sans configuration et le refus d'une empreinte incohérente.
+
+Pour remplacer plutôt la CA interne par un certificat de la PKI d'entreprise, mettez `tls /certs/cert.pem /certs/key.pem` dans `deploy/Caddyfile` et montez ces fichiers en lecture seule dans le service `proxy`. Les PC qui font confiance à la PKI d'entreprise n'ont alors rien à installer.
+
+### Recette de restauration isolée (`deploy/restore-isole.sh`)
+
+**Pour cette première recette, une VM ou une machine de test distincte de la production est obligatoire.** Ne jamais la jouer sur le serveur de production. Le script refuse de s'exécuter dans les cas suivants :
+- conteneurs ou volumes du projet de production `celluloplast` présents ;
+- projet de recette `cellulo-restore` déjà existant (cible non vide) ;
+- base cible non vide ;
+- adresse fournie identique à celle de la production ;
+- empreinte de CA différente de celle attendue.
+
+Chaque commande Docker utilise explicitement `-p cellulo-restore`. Le script s'arrête à la première étape en échec, **avant** le démarrage de l'application et **avant** tout nettoyage des fichiers.
+
+Prérequis sur la VM de test :
+- Debian, Docker et le plugin compose installés ;
+- dépôt cloné dans `/opt/celluloplast`, sur le SHA à recetter ;
+- un compte nominatif dont `sudo` demande un mot de passe.
+
+**1. Sur le poste d'administration** (qui détient la clé privée de récupération). Les fichiers déchiffrés sont écrits dans le répertoire du compte nominatif de la VM, **sans sudo** : la commande distante n'a pas besoin de terminal.
+
+```bash
+set -euo pipefail                      # toute commande en échec arrête la suite
+B=/chemin/des/sauvegardes; D=AAAAMMJJ-HHMMSS; H=prenom.nom@<IP-de-la-VM>
+cd "$B" && sha256sum -c sha256-$D.txt  # intégrité des fichiers chiffrés
+ssh "$H" 'umask 077 && mkdir -p ~/restau'
+gpg -d cellulo-$D.dump.gpg       | ssh "$H" 'umask 077 && cat > ~/restau/cellulo.dump'
+gpg -d documents-$D.tar.gz.gpg   | ssh "$H" 'umask 077 && cat > ~/restau/documents.tar.gz'
+gpg -d secrets-$D.tar.gz.gpg     | ssh "$H" 'umask 077 && cat > ~/restau/secrets.tar.gz'
+# Empreinte de la CA de production, à comparer (certificat installé sur les PC) :
+openssl x509 -noout -fingerprint -sha256 -in celluloplast-root.crt
+```
+
+**2. Sur la VM de test**, en session interactive (`ssh -t`). `sudo` y demande le mot de passe du compte nominatif ; le script, exécuté en root, lit les fichiers de `~/restau` :
+
+```bash
+cd /opt/celluloplast
+sudo deploy/restore-isole.sh --source ~/restau --adresse <IP-de-la-VM> \
+     --machine-de-test-confirmee --empreinte-ca-attendue <EMPREINTE-SHA256-PRODUCTION>
+```
+
+Étapes du script :
+1. garde-fous ;
+2. empreinte de la CA sauvegardée ;
+3. documents et CA dans des volumes **neufs** du projet `cellulo-restore` ;
+4. base démarrée, vérifiée vide (`cellulo|0`), puis `pg_restore --exit-on-error` (le dump est lu par root) ;
+5. démarrage de l'application en mode journal ;
+6. contrôles :
+   - nombre et références des dossiers ;
+   - rôles par compte ;
+   - empreintes SHA-256 de **chaque** PDF et scan (valeur en base = fichier restauré) ;
+   - empreinte du **certificat racine Caddy avant/après** démarrage (Caddy ne doit pas en régénérer un) ;
+   - `MAIL_MODE=journal` et état des remises d'avis ;
+7. après succès seulement, effacement des fichiers en clair de l'espace de travail. `--supprimer-source` efface aussi `~/restau`.
+
+Le script crée un environnement de recette `/root/cellulo-restore.env` (adresse de la VM, mot de passe PostgreSQL neuf, sans destinataire de test). Les contrôles manuels et le démontage l'utilisent, toujours avec le projet explicite :
+
+```bash
+E=/root/cellulo-restore.env
+sudo docker compose -p cellulo-restore --env-file $E ps
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select reference, status from cases order by created_at desc limit 5"
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select u.email, string_agg(r.role, ' + ') from users u join user_roles r on r.user_id = u.id group by u.email"
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select storage_path, file_kind, sha256 from document_versions order by created_at desc limit 4"
+sudo docker compose -p cellulo-restore --env-file $E exec -T app sha256sum /var/lib/celluloplast/<storage_path>
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select status, count(*) from deliveries group by status"
+sudo docker compose -p cellulo-restore --env-file $E down -v      # démontage après recette
+```
+
+Test automatisé du script, sans Docker : `bash deploy/tests/test-restore.sh` (faux `docker` et faux `id`). Il vérifie :
+- chaque garde-fou ;
+- l'ordre des étapes ;
+- l'arrêt avant démarrage si `pg_restore` échoue ;
+- la conservation des fichiers en cas d'échec ;
+- la détection d'une CA régénérée ;
+- la présence de `-p cellulo-restore` sur chaque commande compose.
+
+Il ne remplace pas la recette sur une vraie VM.
+
+La **reprise en production** sur une nouvelle machine (projet `celluloplast`, `.env` d'origine) se fera selon une procédure dédiée, à rédiger **après** le succès de cette recette.
+
+**État de vérification** (12/11/2026) :
+- chiffrement et déchiffrement par `backup.sh` : **testés** avec des secrets fictifs et un faux `docker` (`deploy/tests/test-backup.sh`, 21 contrôles réussis) ;
+- logique de `restore-isole.sh` : **testée** avec un faux `docker` (`deploy/tests/test-restore.sh`, 22 contrôles réussis) ;
+- restauration PostgreSQL + documents : **exécutée et réussie** hors Docker (pg_dump/pg_restore vers une base neuve, dossier de documents neuf ; dossier, rôles et empreintes PDF et scan identiques ; voir 05-Recette.md, « RP ») ;
+- **recette complète sur une VM avec un vrai Docker** (`backup.sh` puis `restore-isole.sh` ; comparaison du dossier, des rôles, des empreintes PDF/scan et du certificat racine Caddy avant/après) : **NON EXÉCUTÉE**. Docker n'est pas utilisable sur le poste de développement, et la production est exclue.
 
 ## Démonstration (données fictives uniquement)
 
@@ -97,15 +212,55 @@ sudo docker compose exec -e DEMO_PASSWORD='MotDePasseDemo-2026' app celluloplast
 
 Cette commande crée deux sites, un compte par rôle (dont un IT + FORMATION), du matériel, une SIM et un catalogue de formations. Elle refuse de s'exécuter si des salariés existent déjà.
 
-## État de cette version (tranches 1 et 2)
+## État de cette version
 
-Livré : comptes et rôles, annonce d'arrivée, besoins et révisions, file « Mon travail » avec prise atomique, formations, comptes IT et indicateur M365, parc IT (actifs, accessoires, SIM), remises et restitutions partielles avec décharge PDF et dépôt du scan signé, demandes ponctuelles, clôture contrôlée, avis en **mode journal**.
+**Livré** :
+- comptes et rôles ;
+- annonce d'arrivée, besoins et révisions ;
+- file « Mon travail » avec prise atomique ;
+- formations ;
+- comptes IT et indicateur M365 ;
+- parc IT (actifs, accessoires, SIM) ;
+- remises et restitutions partielles avec décharge PDF et scan signé ;
+- demandes ponctuelles et clôture contrôlée ;
+- avis en **mode journal** (aucun e-mail envoyé).
 
-Pas encore livré :
+**Lot 1** (fiabilisation de l'arrivée) :
+- données filtrées par équipe dans l'API ;
+- « Confirmer l'arrivée » ;
+- fin de tâche avec preuve (remis / déjà détenu / exception motivée) ;
+- avis affichés honnêtement ;
+- sauvegarde de la configuration et de la CA.
+
+**Lot 2** : import et export Excel du personnel.
+
+**Pas encore livré** :
 - envoi réel par Exchange Online (Graph) ;
 - archivage SharePoint ;
 - étiquettes QR et campagnes d'inventaire ;
 - véhicules ;
 - licences logicielles ;
-- import et export Excel ;
 - mutation (M05) et démission (M06).
+
+## Passer à la version « lot 1 + lot 2 » (migration 0002)
+
+La migration `0002_arrivee_preuves_import.sql` est **additive** :
+- nouvelles colonnes sur `employees`, `tasks` et `outbox` ;
+- nouvelles tables `import_batches` et `import_rows`.
+
+Elle ne modifie aucune donnée existante :
+- les salariés « à venir » le restent. Ceux dont la date prévue est passée, ou dont l'arrivée est close, apparaissent dans « Présence à confirmer » : c'est au RH de vérifier ;
+- les tâches déjà terminées gardent une résolution vide (« terminée avant le contrôle des preuves »). Leurs anciennes observations ne deviennent pas des preuves ;
+- les nouvelles fins de tâche exigent une résolution (contrainte `NOT VALID`, qui ne s'applique qu'aux écritures futures).
+
+Sur une **instance de test** d'abord, puis en production :
+
+```bash
+cd /opt/celluloplast
+sudo deploy/backup.sh /var/backups/celluloplast          # sauvegarde AVANT (obligatoire pour revenir en arrière)
+git fetch && git checkout <version validée>
+sudo docker compose up -d --build                        # la migration 0002 s'applique au démarrage d'app
+sudo docker compose logs app | grep -i -E "migr|démarrée|error"
+```
+
+**Retour arrière.** Une fois la `0002` appliquée, l'ancienne image refuse de démarrer, car sqlx détecte une migration qu'elle ne connaît pas. Ne supprimez pas de colonnes à la main. Restaurez plutôt la sauvegarde prise juste avant (section « Restauration »), après être revenu au code précédent (`git checkout <version précédente>`, puis `docker compose up -d --build`). Les saisies faites entre la mise à jour et le retour arrière sont perdues : planifiez la mise à jour hors des heures de travail.

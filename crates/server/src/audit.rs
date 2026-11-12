@@ -36,6 +36,19 @@ pub async fn record(conn: &mut PgConnection, actor: &CurrentUser, a: Audit<'_>) 
     Ok(())
 }
 
+/// Équipes sans aucun utilisateur actif (l'avis ne pourra pas être distribué).
+pub async fn roles_without_recipient(conn: &mut PgConnection, roles: &[domain::Role]) -> AppResult<Vec<String>> {
+    let codes: Vec<&str> = roles.iter().map(|r| r.as_str()).collect();
+    let missing: Vec<String> = sqlx::query_scalar(
+        "SELECT r FROM unnest($1::text[]) r
+          WHERE NOT EXISTS (SELECT 1 FROM user_roles ur JOIN users u ON u.id = ur.user_id WHERE ur.role = r AND u.active)",
+    )
+    .bind(&codes)
+    .fetch_all(conn)
+    .await?;
+    Ok(missing)
+}
+
 /// Avis à envoyer à des équipes (rôles) et/ou à des utilisateurs précis.
 /// Un même avis n'est remis qu'une fois par adresse.
 pub struct Notice<'a> {

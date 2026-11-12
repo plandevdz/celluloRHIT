@@ -319,6 +319,7 @@ struct NotificationRow {
     subject: String,
     outbox_status: String,
     outbox_error: Option<String>,
+    missing_roles: Vec<String>,
     created_at: DateTime<Utc>,
     deliveries: Value,
 }
@@ -334,7 +335,7 @@ async fn list_notifications(
         "SELECT o.id AS outbox_id, o.event_type, c.reference AS case_reference,
                 array_to_string(o.target_roles || (SELECT coalesce(array_agg(u.display_name), '{}') FROM users u
                                                     WHERE u.id = ANY(o.target_user_ids)), ', ') AS target,
-                o.subject, o.status AS outbox_status, o.last_error AS outbox_error, o.created_at,
+                o.subject, o.status AS outbox_status, o.last_error AS outbox_error, o.missing_roles, o.created_at,
                 coalesce(jsonb_agg(jsonb_build_object(
                     'recipient', d.recipient_email, 'sent_to', d.sent_to, 'status', d.status,
                     'attempts', d.attempts, 'last_result', d.last_result, 'last_attempt_at', d.last_attempt_at)
@@ -342,7 +343,8 @@ async fn list_notifications(
            FROM outbox o
            LEFT JOIN cases c ON c.id = o.case_id
            LEFT JOIN deliveries d ON d.outbox_id = o.id
-          WHERE ($1::text IS NULL OR o.status = $1 OR d.status = $1)
+          WHERE ($1::text IS NULL OR o.status = $1 OR d.status = $1
+                 OR ($1 = 'anomalie' AND (cardinality(o.missing_roles) > 0 OR o.status = 'erreur')))
           GROUP BY o.id, c.reference
           ORDER BY o.created_at DESC
           LIMIT 200",

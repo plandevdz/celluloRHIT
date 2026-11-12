@@ -26,6 +26,28 @@ impl TaskStatus {
     }
 }
 
+text_enum! {
+    /// Comment une tâche a été soldée. Une exception n'est jamais comptée
+    /// comme du matériel remis.
+    TaskResolution {
+        Remis => "remis",
+        DejaDetenu => "deja_detenu",
+        Exception => "exception",
+        Realise => "realise",
+    }
+}
+
+impl TaskResolution {
+    pub fn label(self) -> &'static str {
+        match self {
+            TaskResolution::Remis => "Remis",
+            TaskResolution::DejaDetenu => "Déjà détenu",
+            TaskResolution::Exception => "Exception motivée",
+            TaskResolution::Realise => "Réalisé",
+        }
+    }
+}
+
 /// Actions possibles sur une tâche.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TaskAction {
