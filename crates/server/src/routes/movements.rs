@@ -43,6 +43,7 @@ pub async fn holdings_json(conn: &mut PgConnection, employee_id: Uuid) -> AppRes
     let v: Value = sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
                     'assignment_id', a.id, 'origin_line_id', a.handover_line_id, 'item_type', a.item_type,
+                    'asset_kind', (SELECT kind FROM assets WHERE id = a.asset_id),
                     'label', ml.label, 'identifier', ml.identifier, 'quantity', a.quantity,
                     'open_quantity', a.open_quantity, 'since', a.started_at,
                     'origin_reference', m.reference, 'case_reference', c.reference)

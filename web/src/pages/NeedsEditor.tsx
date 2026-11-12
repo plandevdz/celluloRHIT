@@ -149,12 +149,12 @@ export function NeedsEditor({
   );
 }
 
-/** Équipes qui seront prévenues pour une annonce. */
+/** Codes des équipes qui verront l'annonce. */
 export function recipients(needs: Record<string, NeedValue>, trainings: TrainingValue[]): string[] {
   const teams = new Set<string>(["IT", "FORMATION"]);
   for (const n of Object.values(needs)) if (n.answer === "oui") teams.add(needTeam[n.category]);
   if (trainings.length) teams.add("FORMATION");
-  return [...teams].map((t) => roleLabel[t]);
+  return [...teams];
 }
 
 export function needsPayload(needs: Record<string, NeedValue>): NeedValue[] {

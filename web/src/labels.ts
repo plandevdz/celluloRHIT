@@ -123,11 +123,26 @@ export const documentStatusLabel: Record<string, string> = {
 
 export const deliveryStatusLabel: Record<string, string> = {
   en_attente: "En attente",
-  journalise: "Journalisé (non envoyé)",
-  accepte: "Accepté par Microsoft",
+  journalise: "Consigné — mode test, aucun e-mail envoyé",
+  accepte: "Accepté par Exchange",
   a_verifier: "À vérifier",
-  echec: "Échec",
+  echec: "En erreur",
 };
+
+export const resolutionLabel: Record<string, string> = {
+  remis: "Remis",
+  deja_detenu: "Déjà détenu",
+  exception: "Exception motivée",
+  realise: "Réalisé",
+};
+
+/** Phrase exacte sur la diffusion d'un avis, selon le mode d'envoi. */
+export function visibilityText(roles: string[], mailMode: string): string {
+  const teams = roles.map((r) => roleLabel[r] ?? r).join(", ");
+  return mailMode === "journal"
+    ? `Dossier visible par ${teams} — aucun e-mail envoyé (mode test)`
+    : `Dossier visible par ${teams} — avis par e-mail en file d'envoi`;
+}
 
 const TZ = "Africa/Algiers";
 
