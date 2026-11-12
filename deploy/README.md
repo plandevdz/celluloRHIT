@@ -119,48 +119,88 @@ Test automatisé, avec des secrets fictifs et un faux `docker` : `bash deploy/te
 
 Pour remplacer plutôt la CA interne par un certificat de la PKI d'entreprise, mettez `tls /certs/cert.pem /certs/key.pem` dans `deploy/Caddyfile` et montez ces fichiers en lecture seule dans le service `proxy`. Les PC qui font confiance à la PKI d'entreprise n'ont alors rien à installer.
 
-### Restauration (instance isolée, volumes neufs)
+### Recette de restauration isolée (`deploy/restore-isole.sh`)
 
-Le déchiffrement se fait sur le **poste d'administration** qui détient la clé privée. Les flux déchiffrés sont envoyés à la machine de restauration par SSH, sans jamais y déposer la clé privée. On restaure sur une autre machine, ou sous un autre nom de projet pour ne pas toucher la production. L'envoi de mails reste en mode journal.
+**Pour cette première recette, une VM ou une machine de test distincte de la production est obligatoire.** Ne jamais la jouer sur le serveur de production. Le script refuse de s'exécuter dans les cas suivants :
+- conteneurs ou volumes du projet de production `celluloplast` présents ;
+- projet de recette `cellulo-restore` déjà existant (cible non vide) ;
+- base cible non vide ;
+- adresse fournie identique à celle de la production ;
+- empreinte de CA différente de celle attendue.
 
-```bash
-# --- sur le poste d'administration (clé privée importée : gpg --import cle-privee-sauvegarde.asc)
-B=/chemin/des/sauvegardes; D=AAAAMMJJ-HHMMSS; H=admin@machine-de-restauration
-cd "$B" && sha256sum -c sha256-$D.txt                                                   # 1. intégrité
-gpg -d secrets-$D.tar.gz.gpg   | ssh $H 'sudo mkdir -p -m 700 /root/restau && sudo tar xzf - -C /root/restau'
-gpg -d cellulo-$D.dump.gpg     | ssh $H 'sudo tee /root/restau/cellulo.dump >/dev/null'
-gpg -d documents-$D.tar.gz.gpg | ssh $H 'sudo tee /root/restau/documents.tar.gz >/dev/null'
+Chaque commande Docker utilise explicitement `-p cellulo-restore`. Le script s'arrête à la première étape en échec, **avant** le démarrage de l'application et **avant** tout nettoyage des fichiers.
 
-# --- sur la machine de restauration (dans /opt/celluloplast)
-export COMPOSE_PROJECT_NAME=cellulo-restore
-sudo install -m 600 /root/restau/cfg/.env .env                                         # 2. configuration
-sudo docker compose up -d db                                                           # 3. base
-sudo docker compose exec -T db pg_restore -U cellulo -d cellulo --clean --if-exists < /root/restau/cellulo.dump
-sudo docker run --rm -v ${COMPOSE_PROJECT_NAME}_documents:/data -v /root/restau:/r debian:trixie-slim \
-  sh -c "tar xzf /r/documents.tar.gz -C /data && chown -R 10001 /data"                # 4. documents
-sudo docker run --rm -v ${COMPOSE_PROJECT_NAME}_caddy_data:/caddy -v /root/restau:/r debian:trixie-slim \
-  sh -c "mkdir -p /caddy/caddy && cp -a /r/caddy/caddy/pki /caddy/caddy/"            # 5. même CA (même certificat racine)
-sudo docker compose up -d --build                                                      # 6. application
-sudo shred -u /root/restau/cfg/.env /root/restau/caddy/caddy/pki/authorities/local/*.key; sudo rm -rf /root/restau
-```
+Prérequis sur la VM de test :
+- Debian, Docker et le plugin compose installés ;
+- dépôt cloné dans `/opt/celluloplast`, sur le SHA à recetter ;
+- un compte nominatif dont `sudo` demande un mot de passe.
 
-Avant toute remise en service, contrôlez :
+**1. Sur le poste d'administration** (qui détient la clé privée de récupération). Les fichiers déchiffrés sont écrits dans le répertoire du compte nominatif de la VM, **sans sudo** : la commande distante n'a pas besoin de terminal.
 
 ```bash
-# un dossier et ses rôles
-sudo docker compose exec db psql -U cellulo -c "select reference, status from cases order by created_at desc limit 5"
-sudo docker compose exec db psql -U cellulo -c "select u.email, array_agg(r.role) from users u join user_roles r on r.user_id = u.id group by u.email"
-# empreintes d'un PDF et d'un scan : la valeur en base doit égaler le fichier restauré
-sudo docker compose exec db psql -U cellulo -c "select storage_path, file_kind, sha256 from document_versions order by created_at desc limit 4"
-sudo docker compose exec app sha256sum /var/lib/celluloplast/<storage_path>
-# file des avis : rien ne doit partir vers de vraies boîtes
-sudo docker compose exec db psql -U cellulo -c "select status, count(*) from deliveries group by status"
+set -euo pipefail                      # toute commande en échec arrête la suite
+B=/chemin/des/sauvegardes; D=AAAAMMJJ-HHMMSS; H=prenom.nom@<IP-de-la-VM>
+cd "$B" && sha256sum -c sha256-$D.txt  # intégrité des fichiers chiffrés
+ssh "$H" 'umask 077 && mkdir -p ~/restau'
+gpg -d cellulo-$D.dump.gpg       | ssh "$H" 'umask 077 && cat > ~/restau/cellulo.dump'
+gpg -d documents-$D.tar.gz.gpg   | ssh "$H" 'umask 077 && cat > ~/restau/documents.tar.gz'
+gpg -d secrets-$D.tar.gz.gpg     | ssh "$H" 'umask 077 && cat > ~/restau/secrets.tar.gz'
+# Empreinte de la CA de production, à comparer (certificat installé sur les PC) :
+openssl x509 -noout -fingerprint -sha256 -in celluloplast-root.crt
 ```
+
+**2. Sur la VM de test**, en session interactive (`ssh -t`). `sudo` y demande le mot de passe du compte nominatif ; le script, exécuté en root, lit les fichiers de `~/restau` :
+
+```bash
+cd /opt/celluloplast
+sudo deploy/restore-isole.sh --source ~/restau --adresse <IP-de-la-VM> \
+     --machine-de-test-confirmee --empreinte-ca-attendue <EMPREINTE-SHA256-PRODUCTION>
+```
+
+Étapes du script :
+1. garde-fous ;
+2. empreinte de la CA sauvegardée ;
+3. documents et CA dans des volumes **neufs** du projet `cellulo-restore` ;
+4. base démarrée, vérifiée vide (`cellulo|0`), puis `pg_restore --exit-on-error` (le dump est lu par root) ;
+5. démarrage de l'application en mode journal ;
+6. contrôles :
+   - nombre et références des dossiers ;
+   - rôles par compte ;
+   - empreintes SHA-256 de **chaque** PDF et scan (valeur en base = fichier restauré) ;
+   - empreinte du **certificat racine Caddy avant/après** démarrage (Caddy ne doit pas en régénérer un) ;
+   - `MAIL_MODE=journal` et état des remises d'avis ;
+7. après succès seulement, effacement des fichiers en clair de l'espace de travail. `--supprimer-source` efface aussi `~/restau`.
+
+Le script crée un environnement de recette `/root/cellulo-restore.env` (adresse de la VM, mot de passe PostgreSQL neuf, sans destinataire de test). Les contrôles manuels et le démontage l'utilisent, toujours avec le projet explicite :
+
+```bash
+E=/root/cellulo-restore.env
+sudo docker compose -p cellulo-restore --env-file $E ps
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select reference, status from cases order by created_at desc limit 5"
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select u.email, string_agg(r.role, ' + ') from users u join user_roles r on r.user_id = u.id group by u.email"
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select storage_path, file_kind, sha256 from document_versions order by created_at desc limit 4"
+sudo docker compose -p cellulo-restore --env-file $E exec -T app sha256sum /var/lib/celluloplast/<storage_path>
+sudo docker compose -p cellulo-restore --env-file $E exec -T db psql -U cellulo -d cellulo -c "select status, count(*) from deliveries group by status"
+sudo docker compose -p cellulo-restore --env-file $E down -v      # démontage après recette
+```
+
+Test automatisé du script, sans Docker : `bash deploy/tests/test-restore.sh` (faux `docker` et faux `id`). Il vérifie :
+- chaque garde-fou ;
+- l'ordre des étapes ;
+- l'arrêt avant démarrage si `pg_restore` échoue ;
+- la conservation des fichiers en cas d'échec ;
+- la détection d'une CA régénérée ;
+- la présence de `-p cellulo-restore` sur chaque commande compose.
+
+Il ne remplace pas la recette sur une vraie VM.
+
+La **reprise en production** sur une nouvelle machine (projet `celluloplast`, `.env` d'origine) se fera selon une procédure dédiée, à rédiger **après** le succès de cette recette.
 
 **État de vérification** (12/11/2026) :
 - chiffrement et déchiffrement par `backup.sh` : **testés** avec des secrets fictifs et un faux `docker` (`deploy/tests/test-backup.sh`, 21 contrôles réussis) ;
+- logique de `restore-isole.sh` : **testée** avec un faux `docker` (`deploy/tests/test-restore.sh`, 22 contrôles réussis) ;
 - restauration PostgreSQL + documents : **exécutée et réussie** hors Docker (pg_dump/pg_restore vers une base neuve, dossier de documents neuf ; dossier, rôles et empreintes PDF et scan identiques ; voir 05-Recette.md, « RP ») ;
-- restauration complète par volumes Docker (procédure ci-dessus, CA Caddy comprise) et exécution de `backup.sh` contre un vrai Docker : **non exécutées**, faute de Docker utilisable sur le poste de développement. À jouer sur une machine de test avant la mise en production.
+- **recette complète sur une VM avec un vrai Docker** (`backup.sh` puis `restore-isole.sh` ; comparaison du dossier, des rôles, des empreintes PDF/scan et du certificat racine Caddy avant/après) : **NON EXÉCUTÉE**. Docker n'est pas utilisable sur le poste de développement, et la production est exclue.
 
 ## Démonstration (données fictives uniquement)
 
