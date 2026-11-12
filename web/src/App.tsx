@@ -14,6 +14,7 @@ import EmployeePage from "./pages/EmployeePage";
 import EmployeesPage from "./pages/EmployeesPage";
 import HandoverPage from "./pages/HandoverPage";
 import HomePage from "./pages/HomePage";
+import { ImportBatchPage, ImportStartPage } from "./pages/ImportPage";
 import ReturnPage from "./pages/ReturnPage";
 import TrainingsPage from "./pages/TrainingsPage";
 import WorkPage from "./pages/WorkPage";
@@ -80,6 +81,8 @@ export default function App() {
           <Route path="/dossiers" element={<CasesPage />} />
           <Route path="/dossiers/:reference" element={<CasePage />} />
           <Route path="/personnel" element={<EmployeesPage />} />
+          <Route path="/personnel/import" element={<ImportStartPage />} />
+          <Route path="/personnel/import/:id" element={<ImportBatchPage />} />
           <Route path="/personnel/:id" element={<EmployeePage />} />
           <Route path="/parc" element={<AssetsPage />} />
           <Route path="/parc/actifs/:id" element={<AssetPage />} />

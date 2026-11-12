@@ -3,6 +3,7 @@ pub mod assets;
 pub mod auth;
 pub mod cases;
 pub mod employees;
+pub mod imports;
 pub mod movements;
 pub mod tasks;
 pub mod trainings;
@@ -63,6 +64,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .merge(trainings::routes())
         .merge(assets::routes())
         .merge(movements::routes(state.config.max_upload_bytes))
+        .merge(imports::routes(state.config.max_upload_bytes))
         .fallback(not_found)
         .layer(middleware::from_fn(require_client_header))
 }

@@ -7,6 +7,7 @@ pub mod documents;
 pub mod error;
 pub mod idempotency;
 pub mod pdf;
+pub mod personnel_xlsx;
 pub mod routes;
 pub mod seed;
 pub mod state;
