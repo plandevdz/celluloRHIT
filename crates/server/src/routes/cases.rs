@@ -467,11 +467,15 @@ async fn create_arrival(
         },
     )
     .await?;
+    // Visibilité du dossier ≠ envoi d'un e-mail : la réponse dit les deux.
+    let without_recipient = audit::roles_without_recipient(&mut tx, &roles).await?;
     let response = json!({
         "case_id": case_id,
         "reference": reference,
         "employee_id": employee_id,
-        "notified_roles": roles,
+        "visible_to": roles,
+        "teams_without_recipient": without_recipient,
+        "mail_mode": state.config.mail_mode.as_str(),
         "tasks_created": tasks_created,
     });
     idempotency::finish(&mut tx, user.id, &key, StatusCode::CREATED, &response).await?;
@@ -604,8 +608,18 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     if !can_view_case(&mut conn, &user, c.id).await? {
         return Err(AppError::forbidden());
     }
-    if !user.is_hr() {
-        c.note = None; // les notes RH restent au RH
+    // Périmètre : le RH et l'ADMIN voient tout ; les autres équipes ne
+    // reçoivent que ce qui sert leur mission (filtré ici, dans l'API).
+    let hr = user.is_hr();
+    let it = user.has(Role::It);
+    let roles: Vec<&str> = user.roles.iter().map(|r| r.as_str()).collect();
+    if !hr {
+        c.note = None;
+        c.close_note = None;
+        c.parent_reference = None;
+        if !it {
+            c.matricule = None;
+        }
     }
     let visible_categories: Vec<&str> = if user.is_hr() {
         NeedCategory::ALL.iter().map(|c| c.as_str()).collect()
@@ -634,56 +648,94 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
                     'id', t.id, 'title', t.title, 'role', t.role, 'status', t.status, 'owner', o.display_name,
                     'owner_id', t.owner_id, 'due_date', t.due_date, 'blocked_reason', t.blocked_reason,
                     'done_note', t.done_note, 'claimed_at', t.claimed_at, 'completed_at', t.completed_at,
-                    'version', t.version, 'need_category', n.category)
+                    'version', t.version, 'need_category', n.category,
+                    'resolution', t.resolution, 'resolution_evidence', t.resolution_evidence)
                     ORDER BY t.role, t.created_at), '[]')
            FROM tasks t LEFT JOIN users o ON o.id = t.owner_id LEFT JOIN case_needs n ON n.id = t.need_id
-          WHERE t.case_id = $1",
+          WHERE t.case_id = $1 AND ($2 OR t.role = ANY($3) OR t.owner_id = $4)",
     )
     .bind(c.id)
+    .bind(hr)
+    .bind(&roles)
+    .bind(user.id)
     .fetch_one(&mut *conn)
     .await?;
-    let trainings: Value = sqlx::query_scalar(
+    let trainings: Value = if hr || user.has(Role::Formation) {
+        sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
                     'id', s.id, 'catalog_id', s.catalog_id, 'name', tc.name, 'status', s.status, 'trainer', u.display_name,
                     'planned_date', s.planned_date, 'done_date', s.done_date, 'reason', s.reason) ORDER BY tc.name), '[]')
            FROM training_sessions s JOIN training_catalog tc ON tc.id = s.catalog_id LEFT JOIN users u ON u.id = s.trainer_id
           WHERE s.case_id = $1",
-    )
-    .bind(c.id)
-    .fetch_one(&mut *conn)
-    .await?;
-    let movements = if user.has_any(&[Role::Rh, Role::Admin, Role::It]) {
+        )
+        .bind(c.id)
+        .fetch_one(&mut *conn)
+        .await?
+    } else {
+        json!([])
+    };
+    // Décharges et lignes remises : RH, ADMIN et IT uniquement.
+    let movements = if hr || it {
         crate::routes::movements::case_movements_json(&mut conn, c.id).await?
     } else {
         json!([])
     };
-    let children: Value = sqlx::query_scalar(
-        "SELECT coalesce(jsonb_agg(jsonb_build_object('reference', reference, 'kind', kind, 'status', status) ORDER BY created_at), '[]')
-           FROM cases WHERE parent_case_id = $1",
-    )
-    .bind(c.id)
-    .fetch_one(&mut *conn)
-    .await?;
+    // Autres dossiers du salarié : RH et ADMIN uniquement.
+    let children: Value = if hr {
+        sqlx::query_scalar(
+            "SELECT coalesce(jsonb_agg(jsonb_build_object('reference', reference, 'kind', kind, 'status', status) ORDER BY created_at), '[]')
+               FROM cases WHERE parent_case_id = $1",
+        )
+        .bind(c.id)
+        .fetch_one(&mut *conn)
+        .await?
+    } else {
+        json!([])
+    };
+    // Historique : complet pour le RH ; sinon, les seuls événements des
+    // tâches et besoins de l'équipe, sans le détail des données.
     let history: Value = sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object('at', a.at, 'action', a.action, 'actor', u.display_name) ORDER BY a.at DESC), '[]')
-           FROM (SELECT * FROM audit_events WHERE case_id = $1 ORDER BY at DESC LIMIT 100) a
+           FROM (SELECT * FROM audit_events ae
+                  WHERE ae.case_id = $1
+                    AND ($2
+                         OR (ae.entity = 'task' AND ae.entity_id IN
+                               (SELECT t.id FROM tasks t WHERE t.case_id = $1 AND (t.role = ANY($3) OR t.owner_id = $4)))
+                         OR (ae.entity = 'case_need' AND ae.entity_id IN
+                               (SELECT n.id FROM case_needs n WHERE n.case_id = $1 AND n.category = ANY($5))))
+                  ORDER BY ae.at DESC LIMIT 100) a
            LEFT JOIN users u ON u.id = a.actor_id",
     )
     .bind(c.id)
+    .bind(hr)
+    .bind(&roles)
+    .bind(user.id)
+    .bind(&visible_categories)
     .fetch_one(&mut *conn)
     .await?;
-    let notifications: Value = sqlx::query_scalar(
-        "SELECT coalesce(jsonb_agg(jsonb_build_object('subject', o.subject, 'status', o.status, 'created_at', o.created_at,
-                    'recipients', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id),
-                    'delivered', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id AND d.status IN ('journalise', 'accepte')),
-                    'failed', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id AND d.status IN ('echec', 'a_verifier')))
-                    ORDER BY o.created_at DESC), '[]')
-           FROM outbox o WHERE o.case_id = $1",
-    )
-    .bind(c.id)
-    .fetch_one(&mut *conn)
-    .await?;
+    // Suivi des avis : RH et ADMIN. « Consigné » (mode journal) n'est jamais
+    // compté comme « envoyé ».
+    let notifications: Value = if hr {
+        sqlx::query_scalar(
+            "SELECT coalesce(jsonb_agg(jsonb_build_object('subject', o.subject, 'status', o.status, 'created_at', o.created_at,
+                        'target_roles', o.target_roles, 'missing_roles', o.missing_roles,
+                        'recipients', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id),
+                        'pending', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id AND d.status = 'en_attente'),
+                        'logged', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id AND d.status = 'journalise'),
+                        'accepted', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id AND d.status = 'accepte'),
+                        'failed', (SELECT count(*) FROM deliveries d WHERE d.outbox_id = o.id AND d.status IN ('echec', 'a_verifier')))
+                        ORDER BY o.created_at DESC), '[]')
+               FROM outbox o WHERE o.case_id = $1",
+        )
+        .bind(c.id)
+        .fetch_one(&mut *conn)
+        .await?
+    } else {
+        json!([])
+    };
     Ok(Json(json!({
+        "scope": if hr { "complet" } else { "equipe" },
+        "mail_mode": state.config.mail_mode.as_str(),
         "case": c,
         "needs": needs,
         "tasks": tasks,
@@ -779,7 +831,7 @@ async fn update_needs(
         .await?;
     }
     tx.commit().await?;
-    Ok(Json(json!({ "version": version + 1, "notified_roles": impacted })))
+    Ok(Json(json!({ "version": version + 1, "visible_to": impacted, "mail_mode": state.config.mail_mode.as_str() })))
 }
 
 // ------------------------------------------------------------------ M04 demande ponctuelle
@@ -912,7 +964,11 @@ async fn create_request(
         },
     )
     .await?;
-    let response = json!({ "case_id": case_id, "reference": reference, "notified_roles": [role] });
+    let without_recipient = audit::roles_without_recipient(&mut tx, &[role]).await?;
+    let response = json!({
+        "case_id": case_id, "reference": reference, "visible_to": [role],
+        "teams_without_recipient": without_recipient, "mail_mode": state.config.mail_mode.as_str(),
+    });
     if let Some(k) = &key {
         idempotency::finish(&mut tx, user.id, k, StatusCode::CREATED, &response).await?;
     }

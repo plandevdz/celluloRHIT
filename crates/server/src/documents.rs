@@ -17,6 +17,11 @@ pub fn to_algiers(t: DateTime<Utc>) -> DateTime<FixedOffset> {
     t.with_timezone(&FixedOffset::east_opt(3600).expect("décalage valide"))
 }
 
+/// Date du jour à Alger (dates RH).
+pub fn algiers_today() -> chrono::NaiveDate {
+    to_algiers(Utc::now()).date_naive()
+}
+
 pub fn fr_datetime(t: DateTime<Utc>) -> String {
     to_algiers(t).format("%d/%m/%Y %H:%M").to_string()
 }

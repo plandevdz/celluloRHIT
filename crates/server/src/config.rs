@@ -9,6 +9,14 @@ pub enum MailMode {
     Journal,
 }
 
+impl MailMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MailMode::Journal => "journal",
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
     pub database_url: String,

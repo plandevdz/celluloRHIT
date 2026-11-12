@@ -58,6 +58,24 @@ pub async fn expand_outbox(state: &AppState) -> anyhow::Result<()> {
         .bind(id)
         .fetch_all(&mut *tx)
         .await?;
+        // Équipes visées sans aucun utilisateur actif : anomalie de routage.
+        let missing: Vec<String> = sqlx::query_scalar(
+            "SELECT r FROM outbox o, unnest(o.target_roles) r
+              WHERE o.id = $1
+                AND NOT EXISTS (SELECT 1 FROM user_roles ur JOIN users u ON u.id = ur.user_id
+                                 WHERE ur.role = r AND u.active)",
+        )
+        .bind(id)
+        .fetch_all(&mut *tx)
+        .await?;
+        sqlx::query("UPDATE outbox SET missing_roles = $2 WHERE id = $1")
+            .bind(id)
+            .bind(&missing)
+            .execute(&mut *tx)
+            .await?;
+        if !missing.is_empty() {
+            tracing::warn!(outbox = %id, roles = ?missing, "équipe sans destinataire actif");
+        }
         if recipients.is_empty() {
             sqlx::query(
                 "UPDATE outbox SET status = 'erreur', last_error = 'aucun destinataire actif : routage à corriger', lease_until = NULL WHERE id = $1",

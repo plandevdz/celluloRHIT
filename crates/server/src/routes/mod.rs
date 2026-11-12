@@ -42,6 +42,7 @@ async fn health(State(state): State<AppState>) -> Response {
         Json(json!({
             "status": if db { "ok" } else { "base indisponible" },
             "version": crate::VERSION,
+            "mail_mode": state.config.mail_mode.as_str(),
         })),
     )
         .into_response()
