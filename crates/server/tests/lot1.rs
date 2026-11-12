@@ -184,6 +184,9 @@ async fn confirmer_arrivee_distincte_de_la_cloture(pool: PgPool) {
     // Le dossier reste ouvert : le PC n'est pas encore remis.
     let cs: String = sqlx::query_scalar("SELECT status FROM cases WHERE id = $1::uuid").bind(&case_id).fetch_one(app.pool()).await.unwrap();
     assert_eq!(cs, "ouvert");
+    // La présence confirmée figure dans l'historique de l'arrivée (vue RH).
+    let (_, detail) = app.call(&rh, Method::GET, &format!("/cases/{}", v["reference"].as_str().unwrap()), None).await;
+    assert!(detail["history"].to_string().contains("arrivee_confirmee"), "{}", detail["history"]);
     let (_, actifs) = app.call(&rh, Method::GET, "/employees?status=actif", None).await;
     assert_eq!(actifs["total"], 1, "compté actif dès sa présence");
 

@@ -697,12 +697,15 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     let history: Value = sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object('at', a.at, 'action', a.action, 'actor', u.display_name) ORDER BY a.at DESC), '[]')
            FROM (SELECT * FROM audit_events ae
-                  WHERE ae.case_id = $1
-                    AND ($2
-                         OR (ae.entity = 'task' AND ae.entity_id IN
-                               (SELECT t.id FROM tasks t WHERE t.case_id = $1 AND (t.role = ANY($3) OR t.owner_id = $4)))
-                         OR (ae.entity = 'case_need' AND ae.entity_id IN
-                               (SELECT n.id FROM case_needs n WHERE n.case_id = $1 AND n.category = ANY($5))))
+                  WHERE (ae.case_id = $1
+                         AND ($2
+                              OR (ae.entity = 'task' AND ae.entity_id IN
+                                    (SELECT t.id FROM tasks t WHERE t.case_id = $1 AND (t.role = ANY($3) OR t.owner_id = $4)))
+                              OR (ae.entity = 'case_need' AND ae.entity_id IN
+                                    (SELECT n.id FROM case_needs n WHERE n.case_id = $1 AND n.category = ANY($5)))))
+                     -- Présence réelle (événement du salarié) : visible du RH dans l'arrivée.
+                     OR ($2 AND $7 = 'ONB' AND ae.employee_id = $6
+                         AND ae.action IN ('arrivee_confirmee', 'date_arrivee_corrigee'))
                   ORDER BY ae.at DESC LIMIT 100) a
            LEFT JOIN users u ON u.id = a.actor_id",
     )
@@ -711,6 +714,8 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     .bind(&roles)
     .bind(user.id)
     .bind(&visible_categories)
+    .bind(c.employee_id)
+    .bind(&c.kind)
     .fetch_one(&mut *conn)
     .await?;
     // Suivi des avis : RH et ADMIN. « Consigné » (mode journal) n'est jamais

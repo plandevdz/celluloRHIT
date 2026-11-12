@@ -78,7 +78,7 @@ export function CompleteTaskDialog({
         <fieldset>
           <legend>Comment la tâche est-elle soldée ?</legend>
           {options.map((o) => (
-            <label key={o.id} className="inline-choice" style={{ marginBottom: ".4rem" }}>
+            <label key={o.id} className="choice-row">
               <input type="radio" name="resolution" checked={mode === o.id} onChange={() => setMode(o.id)} />
               <span>
                 <strong>{o.label}</strong> <span className="small muted">— {o.hint}</span>
@@ -93,7 +93,7 @@ export function CompleteTaskDialog({
             <fieldset>
               <legend>Bien détenu</legend>
               {candidates.map((h) => (
-                <label key={h.assignment_id} className="inline-choice">
+                <label key={h.assignment_id} className="choice-row">
                   <input
                     type="checkbox"
                     checked={selected.includes(h.assignment_id)}

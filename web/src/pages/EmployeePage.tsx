@@ -48,7 +48,7 @@ export default function EmployeePage() {
         subtitle={
           <>
             <Badge status={e.status} label={employeeStatusLabel[e.status]} /> · {e.job_title ?? "poste ?"} · {e.site_name ?? "site ?"}
-            {e.matricule ? ` · matricule ${e.matricule}` : " · sans matricule"}
+            {full && (e.matricule ? ` · matricule ${e.matricule}` : " · sans matricule")}
           </>
         }
         actions={
