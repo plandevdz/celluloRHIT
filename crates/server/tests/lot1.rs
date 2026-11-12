@@ -324,6 +324,125 @@ async fn preuve_de_remise_par_categorie(pool: PgPool) {
     assert_eq!(phones_out, 0, "aucune affectation fictive créée par une exception");
 }
 
+/// Une remise unique « PC + SIM » lancée depuis la tâche SIM solde aussi
+/// la tâche PC du même dossier grâce à la ligne PC (et seulement elle).
+/// Inverse : une SIM seule, ou un PC remis dans un autre dossier, ne
+/// permettent pas de déclarer ce PC « remis » ; le résultat correct pour un
+/// PC déjà détenu est « déjà détenu ».
+#[sqlx::test(migrator = "server::MIGRATOR")]
+async fn remise_unique_pc_sim_et_cas_inverses(pool: PgPool) {
+    let app = TestApp::new(pool).await;
+    let rh = app.user("Rh Unique", &["RH"]).await;
+    let it = app.user("It Unique", &["IT"]).await;
+    let site = app.site("ORAN").await;
+    let needs = json!({ "needs": [{ "category": "pc", "answer": "oui" }, { "category": "sim", "answer": "oui" }] });
+    let new_sim = |iccid: &'static str| {
+        let pool = app.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>("INSERT INTO sim_cards (iccid) VALUES ($1) RETURNING id")
+                .bind(iccid)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    let line_of = |movement_ref: String, asset: Option<Uuid>, sim: Option<Uuid>| {
+        let pool = app.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT ml.id FROM movement_lines ml JOIN movements m ON m.id = ml.movement_id
+                  WHERE m.reference = $1 AND (ml.asset_id = $2 OR ml.sim_id = $3)",
+            )
+            .bind(movement_ref)
+            .bind(asset)
+            .bind(sim)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+
+    // ---- Cas nominal : une seule remise « SIM + PC » depuis la tâche SIM.
+    let a = app.announce(&rh, site, "Adel", "Bouzid", needs.clone()).await;
+    let (emp_a, case_a) = (a["employee_id"].as_str().unwrap().to_string(), a["case_id"].as_str().unwrap().to_string());
+    let (_, view) = app.call(&rh, Method::GET, &format!("/cases/{}", a["reference"].as_str().unwrap()), None).await;
+    let pc_a = task_id(&view["tasks"], "IT", "PC");
+    let sim_task_a = task_id(&view["tasks"], "IT", "SIM");
+    app.call(&it, Method::POST, &format!("/tasks/{pc_a}/claim"), None).await;
+    app.call(&it, Method::POST, &format!("/tasks/{sim_task_a}/claim"), None).await;
+    let pc_asset = new_asset(&app, "PC-UNIQUE", "pc_fixe").await;
+    let sim_a = new_sim("8921300000000000101").await;
+    let (s, remise) = app
+        .call(&it, Method::POST, "/handovers", Some(json!({
+            "employee_id": emp_a, "case_id": case_a, "task_id": sim_task_a,
+            "lines": [{ "type": "sim", "sim_id": sim_a }, { "type": "asset", "asset_id": pc_asset }]
+        })))
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{remise}");
+    let mref = remise["reference"].as_str().unwrap().to_string();
+    let pc_line = line_of(mref.clone(), Some(pc_asset), None).await;
+    let sim_line = line_of(mref.clone(), None, Some(sim_a)).await;
+
+    let (s, done) = app.call(&it, Method::POST, &format!("/tasks/{pc_a}/complete"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "la tâche PC est soldée par la remise lancée depuis la tâche SIM : {done}");
+    assert_eq!(done["resolution"], "remis");
+    assert_eq!(done["evidence"]["movement_line_ids"], json!([pc_line]), "preuve = la ligne PC, pas la ligne SIM");
+    assert_eq!(done["evidence"]["movements"], json!([mref]));
+    let (s, done) = app.call(&it, Method::POST, &format!("/tasks/{sim_task_a}/complete"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(done["evidence"]["movement_line_ids"], json!([sim_line]), "preuve SIM = la ligne SIM");
+
+    // ---- Inverse 1 : une SIM seule ne prouve pas le PC.
+    let b = app.announce(&rh, site, "Farah", "Meziane", needs.clone()).await;
+    let (emp_b, case_b) = (b["employee_id"].as_str().unwrap().to_string(), b["case_id"].as_str().unwrap().to_string());
+    let (_, view) = app.call(&rh, Method::GET, &format!("/cases/{}", b["reference"].as_str().unwrap()), None).await;
+    let pc_b = task_id(&view["tasks"], "IT", "PC");
+    let sim_task_b = task_id(&view["tasks"], "IT", "SIM");
+    app.call(&it, Method::POST, &format!("/tasks/{pc_b}/claim"), None).await;
+    app.call(&it, Method::POST, &format!("/tasks/{sim_task_b}/claim"), None).await;
+    let sim_b = new_sim("8921300000000000102").await;
+    let (s, _) = app
+        .call(&it, Method::POST, "/handovers", Some(json!({
+            "employee_id": emp_b, "case_id": case_b, "task_id": sim_task_b, "lines": [{ "type": "sim", "sim_id": sim_b }]
+        })))
+        .await;
+    assert_eq!(s, StatusCode::CREATED);
+    let (s, err) = app.call(&it, Method::POST, &format!("/tasks/{pc_b}/complete"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "SIM seule : PC non remis — {err}");
+    assert!(err["message"].as_str().unwrap().contains("0/1"));
+
+    // ---- Inverse 2 : PC remis dans un AUTRE dossier (demande ponctuelle).
+    let (s, dem) = app
+        .call(&rh, Method::POST, &format!("/employees/{emp_b}/requests"), Some(json!({ "category": "pc", "force": true })))
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{dem}");
+    let other_pc = new_asset(&app, "PC-AUTRE-DOSSIER", "pc_portable").await;
+    let (s, remise_dem) = app
+        .call(&it, Method::POST, "/handovers", Some(json!({
+            "employee_id": emp_b, "case_id": dem["case_id"], "lines": [{ "type": "asset", "asset_id": other_pc }]
+        })))
+        .await;
+    assert_eq!(s, StatusCode::CREATED, "{remise_dem}");
+    let (s, err) = app.call(&it, Method::POST, &format!("/tasks/{pc_b}/complete"), Some(json!({ "resolution": "remis" }))).await;
+    assert_eq!(s, StatusCode::UNPROCESSABLE_ENTITY, "un PC remis dans un autre dossier ne prouve pas ce PC : {err}");
+
+    // Le salarié possède déjà un PC : le résultat correct est « déjà détenu ».
+    let (_, held) = app.call(&it, Method::GET, &format!("/employees/{emp_b}/holdings"), None).await;
+    let pc_assignment = held
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["asset_kind"] == "pc_portable")
+        .expect("PC détenu")["assignment_id"]
+        .clone();
+    let (s, done) = app
+        .call(&it, Method::POST, &format!("/tasks/{pc_b}/complete"), Some(json!({ "resolution": "deja_detenu", "assignment_ids": [pc_assignment] })))
+        .await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    assert_eq!(done["resolution"], "deja_detenu");
+    assert_eq!(done["evidence"]["remises_d_origine"], json!([remise_dem["reference"]]));
+}
+
 /// Mode journal : visibilité ≠ envoi ; équipe sans destinataire signalée
 /// sans annuler l'arrivée ; un seul avis pour un IT + FORMATION.
 #[sqlx::test(migrator = "server::MIGRATOR")]
