@@ -1,0 +1,10 @@
+.git
+target
+web/node_modules
+web/dist
+data
+backups
+.env
+.playwright-mcp
+*.md
+modeles

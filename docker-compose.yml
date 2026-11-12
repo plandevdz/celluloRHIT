@@ -1,0 +1,84 @@
+# Celluloplast | Parcours salarié — déploiement sur le serveur Debian.
+# Copier .env.example en .env (droits 600), renseigner les valeurs, puis :
+#   docker compose up -d --build
+# Seul le proxy publie des ports (80 → redirection, 443 HTTPS).
+
+name: celluloplast
+
+services:
+  db:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: cellulo
+      POSTGRES_USER: cellulo
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?définir POSTGRES_PASSWORD dans .env}
+      TZ: Africa/Algiers
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U cellulo -d cellulo"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+    networks: [internal]
+
+  app:
+    build: .
+    image: celluloplast-parcours:latest
+    command: ["celluloplast", "serve"]
+    restart: unless-stopped
+    environment: &app_env
+      DATABASE_URL: postgres://cellulo:${POSTGRES_PASSWORD}@db:5432/cellulo
+      PUBLIC_URL: ${PUBLIC_URL:?définir PUBLIC_URL dans .env}
+      COOKIE_SECURE: "true"
+      MAIL_MODE: journal
+      MAIL_TEST_RECIPIENT: ${MAIL_TEST_RECIPIENT:-}
+      SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-60}
+      SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-10}
+      RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+    volumes:
+      - documents:/var/lib/celluloplast
+    depends_on:
+      db:
+        condition: service_healthy
+    networks: [internal]
+
+  worker:
+    image: celluloplast-parcours:latest
+    pull_policy: never # image construite par le service app
+    command: ["celluloplast", "worker"]
+    restart: unless-stopped
+    environment: *app_env
+    volumes:
+      - documents:/var/lib/celluloplast
+    depends_on:
+      db:
+        condition: service_healthy
+      app:
+        condition: service_started
+    networks: [internal]
+
+  proxy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      SERVER_ADDRESS: ${SERVER_ADDRESS:?définir SERVER_ADDRESS dans .env}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [app]
+    networks: [internal]
+
+volumes:
+  pgdata:
+  documents:
+  caddy_data:
+  caddy_config:
+
+networks:
+  internal:

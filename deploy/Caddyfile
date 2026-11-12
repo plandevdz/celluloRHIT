@@ -1,0 +1,20 @@
+# HTTPS par la CA interne de Caddy, pour l'adresse IP (et/ou le nom DNS
+# interne) du serveur. SERVER_ADDRESS accepte plusieurs adresses séparées
+# par des virgules, ex. « 10.0.0.50, srv-parcours.celluloplast.local ».
+# Le port 80 redirige automatiquement vers 443.
+{
+	skip_install_trust
+}
+
+{$SERVER_ADDRESS} {
+	tls internal
+	encode gzip
+	request_body {
+		max_size 20MB
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+	reverse_proxy app:8080
+}

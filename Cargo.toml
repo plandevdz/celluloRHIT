@@ -1,0 +1,13 @@
+[workspace]
+resolver = "2"
+members = ["crates/domain", "crates/server"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "UNLICENSED"
+publish = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
