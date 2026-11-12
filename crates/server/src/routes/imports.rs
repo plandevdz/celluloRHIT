@@ -195,6 +195,28 @@ fn msg(level: &str, text: impl Into<String>) -> Value {
     json!({ "niveau": level, "texte": text.into() })
 }
 
+/// Protection de la présence réelle : une date d'arrivée confirmée ne se
+/// modifie que par « Corriger la date d'arrivée » sur la fiche (motif
+/// tracé), jamais par import ; une date réelle ne peut pas être future.
+/// Renvoie le motif de refus, ou `None` si la ligne est acceptable.
+fn arrival_rule(e: &Emp, d: &RowData, today: NaiveDate) -> Option<String> {
+    let new = d.arrival?;
+    let fr = |x: NaiveDate| x.format("%d/%m/%Y").to_string();
+    match e.actual_arrival {
+        Some(confirmed) if confirmed != new => Some(format!(
+            "Date d’arrivée réelle déjà confirmée ({}) : le classeur propose {}. Utilisez « Corriger la date d’arrivée » sur la fiche (motif tracé).",
+            fr(confirmed),
+            fr(new)
+        )),
+        Some(_) => None,
+        None if e.status != "a_venir" && new > today => Some(format!(
+            "Date d’arrivée réelle future ({}) refusée pour un salarié déjà présent.",
+            fr(new)
+        )),
+        None => None,
+    }
+}
+
 /// Changements proposés : une valeur vide signifie « conserver ».
 fn diff(e: &Emp, d: &RowData) -> serde_json::Map<String, Value> {
     let mut ch = serde_json::Map::new();
@@ -249,7 +271,7 @@ fn find_site(sites: &[(Uuid, String, String)], label: &str) -> Option<Uuid> {
 }
 
 /// Analyse d'un classeur : aucune écriture métier, seulement des propositions.
-fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[Emp]) -> Vec<Analysed> {
+fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[Emp], today: NaiveDate) -> Vec<Analysed> {
     let by_id: HashMap<Uuid, &Emp> = emps.iter().map(|e| (e.id, e)).collect();
     let by_mat: HashMap<&str, &Emp> = emps.iter().filter_map(|e| e.matricule_norm.as_deref().map(|m| (m, e))).collect();
     let mut by_name: HashMap<&str, Vec<&Emp>> = HashMap::new();
@@ -335,6 +357,9 @@ fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[
                             ),
                         )),
                         _ => {
+                            if let Some(refus) = arrival_rule(e, &d, today) {
+                                a.messages.push(msg("erreur", refus));
+                            }
                             a.changes = diff(e, &d);
                             a.employee = Some((e.id, e.version));
                             a.proposal = if a.changes.is_empty() { "inchange" } else { "mise_a_jour" };
@@ -344,6 +369,9 @@ fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[
             } else if let Some(owner) = mat.as_deref().and_then(|m| by_mat.get(m)) {
                 // Matricule exact : correspondance proposée ; nom différent → à revoir.
                 let same_name = d.name_key().map(|k| k == owner.name_key).unwrap_or(true);
+                if let Some(refus) = arrival_rule(owner, &d, today) {
+                    a.messages.push(msg("erreur", refus));
+                }
                 a.employee = Some((owner.id, owner.version));
                 a.changes = diff(owner, &d);
                 if same_name {
@@ -473,7 +501,7 @@ async fn preview(State(state): State<AppState>, user: CurrentUser, mut multipart
     let mut tx = state.pool.begin().await?;
     let sites = load_sites(&mut tx).await?;
     let emps = sqlx::query_as::<_, Emp>(EMP_SELECT).fetch_all(&mut *tx).await?;
-    let analysed = analyse(rows, &sites, &emps);
+    let analysed = analyse(rows, &sites, &emps, algiers_today());
     let batch_id: Uuid = sqlx::query_scalar(
         "INSERT INTO import_batches (created_by, file_name, file_sha256, format_version) VALUES ($1, $2, $3, $4) RETURNING id",
     )
@@ -837,6 +865,11 @@ async fn update(
         .ok_or_else(|| AppError::not_found("salarié"))?;
     if expected_version.is_some_and(|v| v != e.version) {
         return Err(AppError::conflict("fiche modifiée depuis l'aperçu : relancez un aperçu"));
+    }
+    // Règle de présence réelle appliquée aussi à l'application du lot (une
+    // ligne rattachée après l'aperçu, ou une fiche confirmée entre-temps).
+    if let Some(refus) = arrival_rule(&e, d, today) {
+        return Err(AppError::conflict(refus));
     }
     let changes = diff(&e, d);
     if changes.is_empty() {

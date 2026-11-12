@@ -193,6 +193,95 @@ async fn import_apercu_decisions_application_et_rejeu(pool: PgPool) {
     assert_eq!(count(&app, "SELECT count(*) FROM employees").await, 4);
 }
 
+/// La date d'arrivée réelle confirmée est protégée : identique acceptée,
+/// différente refusée (aperçu ET application), date réelle future refusée,
+/// les autres lignes du lot restent traitables.
+#[sqlx::test(migrator = "server::MIGRATOR")]
+async fn import_protege_la_date_reelle_confirmee(pool: PgPool) {
+    use chrono::Datelike;
+    let app = TestApp::new(pool).await;
+    let rh = app.user("Rh Dates", &["RH"]).await;
+    let site = app.site("ORAN").await;
+    let create = |first: &'static str, last: &'static str, date: &'static str| {
+        json!({ "first_name": first, "last_name": last, "job_title": "Agent", "site_id": site, "arrival_date": date, "already_present": true })
+    };
+    let mut ids = Vec::new();
+    for (f, l, d) in [("Amel", "Saadi", "2022-01-10"), ("Kamel", "Rahmani", "2021-05-03"), ("Djamel", "Ferroukhi", "2020-06-01"), ("Rania", "Lounis", "2020-02-02")] {
+        let (s, v) = app.call(&rh, Method::POST, "/employees", Some(create(f, l, d))).await;
+        assert_eq!(s, StatusCode::OK, "{v}");
+        ids.push(v["id"].as_str().unwrap().to_string());
+    }
+    let (a, c, d, h) = (ids[0].clone(), ids[1].clone(), ids[2].clone(), ids[3].clone());
+    // Fiche historique active dont la date réelle n'a jamais été saisie.
+    sqlx::query("UPDATE employees SET actual_arrival = NULL WHERE id = $1::uuid").bind(&d).execute(app.pool()).await.unwrap();
+
+    let future = server::documents::algiers_today() + chrono::Duration::days(40);
+    let fut = V::D(future.year() as u16, future.month() as u8, future.day() as u8);
+    let bytes = workbook(&[
+        // 2 : même date confirmée + changement de poste → accepté
+        [V::T(&a), V::E, V::E, V::E, V::T("Chef de quai"), V::E, V::D(2022, 1, 10), V::E],
+        // 3 : autre date que la date confirmée → refusé
+        [V::T(&c), V::E, V::E, V::E, V::E, V::E, V::D(2022, 2, 1), V::E],
+        // 4 : date réelle future pour un salarié déjà présent → refusée
+        [V::T(&d), V::E, V::E, V::E, V::E, V::E, fut, V::E],
+        // 5 : salarié historique à créer → accepté
+        [V::E, V::E, V::T("Yanis"), V::T("Ait"), V::T("Magasinier"), V::T("ORAN"), V::D(2023, 3, 1), V::E],
+        // 6 : homonyme de Rania Lounis (date différente) : à revoir, puis rattaché
+        [V::E, V::E, V::T("Rania"), V::T("Lounis"), V::T("Agent"), V::T("ORAN"), V::D(2024, 9, 15), V::E],
+    ]);
+    let (s, p) = upload(&app, &rh, &bytes).await;
+    assert_eq!(s, StatusCode::OK, "{p}");
+    assert_eq!(row(&p, 2)["proposal"], "mise_a_jour", "date identique acceptée : {}", row(&p, 2));
+    assert!(row(&p, 2)["changes"].get("Date d’arrivée").is_none());
+    assert_eq!(row(&p, 3)["proposal"], "rejet");
+    assert!(row(&p, 3)["messages"].to_string().contains("Corriger la date d’arrivée"), "{}", row(&p, 3));
+    assert_eq!(row(&p, 4)["proposal"], "rejet");
+    assert!(row(&p, 4)["messages"].to_string().contains("future"), "{}", row(&p, 4));
+    assert_eq!(row(&p, 5)["proposal"], "creation");
+    assert_eq!(row(&p, 6)["proposal"], "a_revoir");
+
+    // Le RH rattache la ligne 6 à la fiche existante : refus à l'application.
+    let batch = p["batch"]["id"].as_str().unwrap().to_string();
+    let (s, _) = app
+        .call(&rh, Method::POST, &format!("/personnel-imports/{batch}/rows/6/decision"), Some(json!({ "decision": "rattacher", "employee_id": h })))
+        .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, done) = app.call(&rh, Method::POST, &format!("/personnel-imports/{batch}/commit"), Some(json!({}))).await;
+    assert_eq!(s, StatusCode::OK, "{done}");
+    assert_eq!(row(&done, 2)["result"], "mis_a_jour");
+    assert_eq!(row(&done, 3)["result"], "rejete");
+    assert_eq!(row(&done, 4)["result"], "rejete");
+    assert_eq!(row(&done, 5)["result"], "cree", "l'autre ligne valide reste traitable");
+    assert_eq!(row(&done, 6)["result"], "conflit", "règle appliquée aussi au commit : {}", row(&done, 6));
+    assert!(row(&done, 6)["result_message"].as_str().unwrap().contains("Corriger la date d’arrivée"));
+
+    // Base : dates confirmées intactes, modification autorisée appliquée.
+    let date_of = |id: String| {
+        let pool = app.pool().clone();
+        async move {
+            sqlx::query_scalar::<_, Option<chrono::NaiveDate>>("SELECT actual_arrival FROM employees WHERE id = $1::uuid")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(date_of(a.clone()).await, chrono::NaiveDate::from_ymd_opt(2022, 1, 10));
+    assert_eq!(date_of(c.clone()).await, chrono::NaiveDate::from_ymd_opt(2021, 5, 3));
+    assert_eq!(date_of(d.clone()).await, None, "aucune date future enregistrée");
+    assert_eq!(date_of(h.clone()).await, chrono::NaiveDate::from_ymd_opt(2020, 2, 2));
+    let job: String = sqlx::query_scalar("SELECT job_title FROM employee_positions WHERE employee_id = $1::uuid AND valid_to IS NULL")
+        .bind(&a)
+        .fetch_one(app.pool())
+        .await
+        .unwrap();
+    assert_eq!(job, "Chef de quai");
+    let (st, actual): (String, Option<chrono::NaiveDate>) =
+        sqlx::query_as("SELECT status, actual_arrival FROM employees WHERE last_name = 'Ait'").fetch_one(app.pool()).await.unwrap();
+    assert_eq!((st.as_str(), actual), ("actif", chrono::NaiveDate::from_ymd_opt(2023, 3, 1)), "salarié historique créé");
+    assert_eq!(count(&app, "SELECT count(*) FROM audit_events WHERE action = 'date_arrivee_corrigee'").await, 0, "l'import ne corrige jamais une date");
+}
+
 #[sqlx::test(migrator = "server::MIGRATOR")]
 async fn export_droits_et_contenu_reel(pool: PgPool) {
     let app = TestApp::new(pool).await;
