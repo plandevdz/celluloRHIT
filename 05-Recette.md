@@ -46,6 +46,6 @@ Légende : **auto** = test automatisé exécuté et réussi (PostgreSQL 17 réel
 | R13 | partiel : mode journal seul ; Exchange et SharePoint non raccordés | — | — | — |
 | R14 | refus API : oui ; restauration : voir RP | oui (`parcours::r14`, `lot1::graphiste_autorise…`, `lot2_excel::export_droits…`) | oui : 403 en appel direct depuis le navigateur | restauration Docker complète |
 | L1 à L4 | oui | oui (`lot1`, 4 tests) | oui (L1 : Formation et Graphiste ; L2 à L4) | — |
-| RP | `backup.sh` complété | base et documents : **exécuté** (pg_dump/pg_restore, base et dossier neufs, hors Docker) | — | `backup.sh` et restauration par volumes Docker : **non exécutés** (Docker indisponible sur le poste de développement) |
+| RP | `backup.sh` : secrets toujours chiffrés (GPG à clé publique, clé privée hors serveur), code 3 si non configuré | chiffrement/déchiffrement : **oui** (`deploy/tests/test-backup.sh`, secrets fictifs, faux docker) ; restauration PostgreSQL + documents : **exécutée et réussie** hors Docker (base et dossier neufs) | — | restauration complète par volumes Docker (CA comprise) et `backup.sh` contre un vrai Docker : **non exécutées** (Docker indisponible sur le poste de développement) |
 
 Non validé à ce jour : le rendu des noms arabes dans les PDF (les glyphes sont présents, mais la liaison et le sens de lecture ne sont pas traités) et l'impression papier. La présence d'un en-tête PDF ne vaut pas validation.

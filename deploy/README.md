@@ -77,46 +77,71 @@ Les migrations SQL s'appliquent au démarrage de `app`. Les navigateurs ouverts 
 
 | Élément | Fichier produit | Remarque |
 |---|---|---|
-| Base PostgreSQL : dossiers, rôles, audit, références, empreintes des documents | `cellulo-<date>.dump` | `pg_dump` en format custom |
-| Décharges PDF originales, scans signés | `documents-<date>.tar.gz` | volume `celluloplast_documents` |
-| Configuration `.env` (mot de passe PostgreSQL, adresses) | `secrets-<date>.tar.gz` | **sensible** |
-| Autorité de certification interne de Caddy (certificat racine et **clé privée**) | `secrets-<date>.tar.gz` | **sensible**. Sans elle, une restauration crée une nouvelle autorité et tous les PC Windows doivent réinstaller le certificat racine. |
+| Base PostgreSQL : dossiers, rôles, audit, références, empreintes des documents | `cellulo-<date>.dump.gpg` | `pg_dump` en format custom, chiffré |
+| Décharges PDF originales, scans signés | `documents-<date>.tar.gz.gpg` | volume `celluloplast_documents`, chiffré |
+| Configuration `.env` + autorité de certification interne de Caddy (certificat racine et **clé privée**) | `secrets-<date>.tar.gz.gpg` | **toujours chiffré, jamais écrit en clair**. Sans cette CA, une restauration crée une nouvelle autorité et tous les PC Windows doivent réinstaller le certificat racine. |
 | Empreintes SHA-256 des fichiers ci-dessus | `sha256-<date>.txt` | à vérifier avant restauration |
 | Code et image Docker | — | reconstruits depuis Git (`docker compose up -d --build`) |
 
-`sudo deploy/backup.sh /var/backups/celluloplast` crée ces fichiers avec des droits 600. Utilisez `--sans-secrets` pour exclure `.env` et la CA.
+**Chiffrement dès l'écriture, à clé publique.** Les flux passent de `pg_dump` ou `tar` directement à `gpg`, sans fichier intermédiaire en clair. Le serveur ne détient que la **clé publique** de récupération ; la **clé privée** reste hors du serveur (coffre de la DSI). Une personne qui copierait les sauvegardes depuis le serveur ne pourrait donc pas les déchiffrer.
 
-Planifiez la sauvegarde chaque jour (cron root), puis copiez-la **hors de la machine**. Chiffrez au minimum l'archive des secrets avant toute copie :
+**Sans clé configurée**, le script :
+- ne crée **aucune** archive de secrets ;
+- écrit la base et les documents en clair ;
+- affiche « SAUVEGARDE INCOMPLÈTE » et se termine avec le **code 3**.
+
+Un cron doit traiter ce code comme une alerte. `--sans-secrets` exclut volontairement `.env` et la CA : sauvegarde « partielle », code 0.
+
+#### Mettre en place la clé de récupération (une fois)
+
+Sur un **poste d'administration**, pas sur le serveur (Linux avec gnupg, ou Windows avec Gpg4win) :
 
 ```bash
-gpg --symmetric --cipher-algo AES256 /var/backups/celluloplast/secrets-AAAAMMJJ-HHMMSS.tar.gz
-shred -u /var/backups/celluloplast/secrets-AAAAMMJJ-HHMMSS.tar.gz
-rsync -a /var/backups/celluloplast/ sauvegarde@serveur-de-sauvegarde:/celluloplast/
+gpg --quick-generate-key "Celluloplast sauvegarde (DSI)" rsa4096 encr 5y        # phrase de passe forte
+gpg --list-keys --with-colons "Celluloplast sauvegarde" | awk -F: '$1=="fpr"{print $10; exit}'   # empreinte
+gpg --armor --export <EMPREINTE> > backup-pubkey.asc                             # partie PUBLIQUE
+gpg --armor --export-secret-keys <EMPREINTE> > cle-privee-sauvegarde.asc         # à ranger HORS LIGNE (coffre)
+gpg --output revocation.asc --gen-revoke <EMPREINTE>                             # certificat de révocation, au coffre
 ```
 
-La phrase de passe GPG se conserve hors du serveur, par exemple dans le coffre de la DSI. Un disque unique n'est pas une sauvegarde. Aucun de ces fichiers ne doit être déposé dans Git.
+Sur le serveur, ne copiez **que** la partie publique :
+
+```bash
+sudo install -m 644 backup-pubkey.asc /etc/celluloplast/backup-pubkey.asc
+echo 'BACKUP_GPG_RECIPIENT=<EMPREINTE>' | sudo tee /etc/celluloplast/backup.conf
+sudo chmod 600 /etc/celluloplast/backup.conf
+sudo deploy/backup.sh /var/backups/celluloplast; echo "code=$?"   # attendu : « Sauvegarde COMPLÈTE », code=0
+```
+
+Le script refuse de démarrer si l'empreinte ne correspond pas à la clé publique fournie. Planifiez-le chaque jour (cron root) et copiez le résultat **hors de la machine** (`rsync -a /var/backups/celluloplast/ sauvegarde@serveur-de-sauvegarde:/celluloplast/`). Un disque unique n'est pas une sauvegarde. Aucun de ces fichiers ne doit être déposé dans Git.
+
+Test automatisé, avec des secrets fictifs et un faux `docker` : `bash deploy/tests/test-backup.sh`. Il vérifie le chiffrement, l'absence de tout secret en clair sur disque, le déchiffrement avec la seule clé privée, le code 3 sans configuration et le refus d'une empreinte incohérente.
 
 Pour remplacer plutôt la CA interne par un certificat de la PKI d'entreprise, mettez `tls /certs/cert.pem /certs/key.pem` dans `deploy/Caddyfile` et montez ces fichiers en lecture seule dans le service `proxy`. Les PC qui font confiance à la PKI d'entreprise n'ont alors rien à installer.
 
 ### Restauration (instance isolée, volumes neufs)
 
-Sur une autre machine, ou sous un autre nom de projet pour ne pas toucher la production. L'envoi de mails reste en mode journal.
+Le déchiffrement se fait sur le **poste d'administration** qui détient la clé privée. Les flux déchiffrés sont envoyés à la machine de restauration par SSH, sans jamais y déposer la clé privée. On restaure sur une autre machine, ou sous un autre nom de projet pour ne pas toucher la production. L'envoi de mails reste en mode journal.
 
 ```bash
+# --- sur le poste d'administration (clé privée importée : gpg --import cle-privee-sauvegarde.asc)
+B=/chemin/des/sauvegardes; D=AAAAMMJJ-HHMMSS; H=admin@machine-de-restauration
+cd "$B" && sha256sum -c sha256-$D.txt                                                   # 1. intégrité
+gpg -d secrets-$D.tar.gz.gpg   | ssh $H 'sudo mkdir -p -m 700 /root/restau && sudo tar xzf - -C /root/restau'
+gpg -d cellulo-$D.dump.gpg     | ssh $H 'sudo tee /root/restau/cellulo.dump >/dev/null'
+gpg -d documents-$D.tar.gz.gpg | ssh $H 'sudo tee /root/restau/documents.tar.gz >/dev/null'
+
+# --- sur la machine de restauration (dans /opt/celluloplast)
 export COMPOSE_PROJECT_NAME=cellulo-restore
-B=/chemin/des/sauvegardes; D=AAAAMMJJ-HHMMSS
-cd "$B" && sha256sum -c sha256-$D.txt                                    # 1. intégrité
-gpg -d secrets-$D.tar.gz.gpg > /tmp/secrets.tar.gz                      # 2. secrets (si chiffrés)
-cd /opt/celluloplast
-tar xzf /tmp/secrets.tar.gz -C /tmp && cp /tmp/cfg/.env .env && chmod 600 .env
-sudo docker compose up -d db                                             # 3. base
-sudo docker compose exec -T db pg_restore -U cellulo -d cellulo --clean --if-exists < "$B/cellulo-$D.dump"
-sudo docker run --rm -v ${COMPOSE_PROJECT_NAME}_documents:/data -v "$B":/backup debian:trixie-slim \
-  sh -c "tar xzf /backup/documents-$D.tar.gz -C /data && chown -R 10001 /data"   # 4. documents
-sudo docker run --rm -v ${COMPOSE_PROJECT_NAME}_caddy_data:/caddy -v /tmp/caddy:/src debian:trixie-slim \
-  sh -c "mkdir -p /caddy/caddy && cp -a /src/caddy/pki /caddy/caddy/"            # 5. même CA (même certificat racine)
-shred -u /tmp/secrets.tar.gz; rm -rf /tmp/cfg /tmp/caddy
-sudo docker compose up -d --build                                        # 6. application
+sudo install -m 600 /root/restau/cfg/.env .env                                         # 2. configuration
+sudo docker compose up -d db                                                           # 3. base
+sudo docker compose exec -T db pg_restore -U cellulo -d cellulo --clean --if-exists < /root/restau/cellulo.dump
+sudo docker run --rm -v ${COMPOSE_PROJECT_NAME}_documents:/data -v /root/restau:/r debian:trixie-slim \
+  sh -c "tar xzf /r/documents.tar.gz -C /data && chown -R 10001 /data"                # 4. documents
+sudo docker run --rm -v ${COMPOSE_PROJECT_NAME}_caddy_data:/caddy -v /root/restau:/r debian:trixie-slim \
+  sh -c "mkdir -p /caddy/caddy && cp -a /r/caddy/caddy/pki /caddy/caddy/"            # 5. même CA (même certificat racine)
+sudo docker compose up -d --build                                                      # 6. application
+sudo shred -u /root/restau/cfg/.env /root/restau/caddy/caddy/pki/authorities/local/*.key; sudo rm -rf /root/restau
 ```
 
 Avant toute remise en service, contrôlez :
@@ -133,8 +158,9 @@ sudo docker compose exec db psql -U cellulo -c "select status, count(*) from del
 ```
 
 **État de vérification** (12/11/2026) :
-- restauration base + documents : **exécutée** sur une instance PostgreSQL isolée, hors Docker (voir 05-Recette.md, « Reprise ») ;
-- `backup.sh` et la restauration par volumes Docker ci-dessus : **non exécutés**, faute de Docker utilisable sur le poste de développement. À jouer sur une machine de test avant la mise en production.
+- chiffrement et déchiffrement par `backup.sh` : **testés** avec des secrets fictifs et un faux `docker` (`deploy/tests/test-backup.sh`, 21 contrôles réussis) ;
+- restauration PostgreSQL + documents : **exécutée et réussie** hors Docker (pg_dump/pg_restore vers une base neuve, dossier de documents neuf ; dossier, rôles et empreintes PDF et scan identiques ; voir 05-Recette.md, « RP ») ;
+- restauration complète par volumes Docker (procédure ci-dessus, CA Caddy comprise) et exécution de `backup.sh` contre un vrai Docker : **non exécutées**, faute de Docker utilisable sur le poste de développement. À jouer sur une machine de test avant la mise en production.
 
 ## Démonstration (données fictives uniquement)
 
