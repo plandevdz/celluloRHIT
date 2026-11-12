@@ -38,8 +38,11 @@ La commande affiche un **lien d'activation à usage unique (72 h)**. Ouvrez-le d
 Caddy délivre le certificat HTTPS depuis sa propre autorité interne. Exportez son certificat racine :
 
 ```bash
-sudo docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt ./celluloplast-root.crt
+sudo docker compose cp proxy:/data/caddy/pki/authorities/local/root.crt /tmp/celluloplast-root.crt
+sudo chmod 644 /tmp/celluloplast-root.crt   # certificat public : lisible pour le copier par scp
 ```
+
+Depuis le PC : `scp it1@<IP>:/tmp/celluloplast-root.crt .`
 
 Installez `celluloplast-root.crt` sur chaque PC dans **Autorités de certification racines de confiance** :
 - par GPO : Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Stratégies de clé publique → Autorités de certification racines de confiance → Importer ;
