@@ -16,7 +16,7 @@ use std::time::Duration;
 
 use axum::http::{header, HeaderValue};
 use axum::Router;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::PgPool;
 use tower_http::services::{ServeDir, ServeFile};
 use tower_http::set_header::SetResponseHeaderLayer;
@@ -55,11 +55,21 @@ pub fn app(state: AppState) -> Router {
 /// Connexion à la base, en attendant qu'elle soit prête (démarrage Docker).
 pub async fn connect(database_url: &str) -> anyhow::Result<PgPool> {
     let mut last_error = None;
+    let mut options: PgConnectOptions = database_url
+        .parse()
+        .map_err(|e| anyhow::anyhow!("DATABASE_URL invalide : {e}"))?;
+    // Mot de passe fourni à part : il peut contenir des caractères réservés
+    // dans une URL (%, @, /, …) sans encodage.
+    if let Ok(password) = std::env::var("DATABASE_PASSWORD") {
+        if !password.is_empty() {
+            options = options.password(&password);
+        }
+    }
     for attempt in 1..=30 {
         match PgPoolOptions::new()
             .max_connections(20)
             .acquire_timeout(Duration::from_secs(5))
-            .connect(database_url)
+            .connect_with(options.clone())
             .await
         {
             Ok(pool) => return Ok(pool),
