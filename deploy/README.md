@@ -146,15 +146,55 @@ sudo docker compose exec -e DEMO_PASSWORD='MotDePasseDemo-2026' app celluloplast
 
 Cette commande crée deux sites, un compte par rôle (dont un IT + FORMATION), du matériel, une SIM et un catalogue de formations. Elle refuse de s'exécuter si des salariés existent déjà.
 
-## État de cette version (tranches 1 et 2)
+## État de cette version
 
-Livré : comptes et rôles, annonce d'arrivée, besoins et révisions, file « Mon travail » avec prise atomique, formations, comptes IT et indicateur M365, parc IT (actifs, accessoires, SIM), remises et restitutions partielles avec décharge PDF et dépôt du scan signé, demandes ponctuelles, clôture contrôlée, avis en **mode journal**.
+**Livré** :
+- comptes et rôles ;
+- annonce d'arrivée, besoins et révisions ;
+- file « Mon travail » avec prise atomique ;
+- formations ;
+- comptes IT et indicateur M365 ;
+- parc IT (actifs, accessoires, SIM) ;
+- remises et restitutions partielles avec décharge PDF et scan signé ;
+- demandes ponctuelles et clôture contrôlée ;
+- avis en **mode journal** (aucun e-mail envoyé).
 
-Pas encore livré :
+**Lot 1** (fiabilisation de l'arrivée) :
+- données filtrées par équipe dans l'API ;
+- « Confirmer l'arrivée » ;
+- fin de tâche avec preuve (remis / déjà détenu / exception motivée) ;
+- avis affichés honnêtement ;
+- sauvegarde de la configuration et de la CA.
+
+**Lot 2** : import et export Excel du personnel.
+
+**Pas encore livré** :
 - envoi réel par Exchange Online (Graph) ;
 - archivage SharePoint ;
 - étiquettes QR et campagnes d'inventaire ;
 - véhicules ;
 - licences logicielles ;
-- import et export Excel ;
 - mutation (M05) et démission (M06).
+
+## Passer à la version « lot 1 + lot 2 » (migration 0002)
+
+La migration `0002_arrivee_preuves_import.sql` est **additive** :
+- nouvelles colonnes sur `employees`, `tasks` et `outbox` ;
+- nouvelles tables `import_batches` et `import_rows`.
+
+Elle ne modifie aucune donnée existante :
+- les salariés « à venir » le restent. Ceux dont la date prévue est passée, ou dont l'arrivée est close, apparaissent dans « Présence à confirmer » : c'est au RH de vérifier ;
+- les tâches déjà terminées gardent une résolution vide (« terminée avant le contrôle des preuves »). Leurs anciennes observations ne deviennent pas des preuves ;
+- les nouvelles fins de tâche exigent une résolution (contrainte `NOT VALID`, qui ne s'applique qu'aux écritures futures).
+
+Sur une **instance de test** d'abord, puis en production :
+
+```bash
+cd /opt/celluloplast
+sudo deploy/backup.sh /var/backups/celluloplast          # sauvegarde AVANT (obligatoire pour revenir en arrière)
+git fetch && git checkout <version validée>
+sudo docker compose up -d --build                        # la migration 0002 s'applique au démarrage d'app
+sudo docker compose logs app | grep -i -E "migr|démarrée|error"
+```
+
+**Retour arrière.** Une fois la `0002` appliquée, l'ancienne image refuse de démarrer, car sqlx détecte une migration qu'elle ne connaît pas. Ne supprimez pas de colonnes à la main. Restaurez plutôt la sauvegarde prise juste avant (section « Restauration »), après être revenu au code précédent (`git checkout <version précédente>`, puis `docker compose up -d --build`). Les saisies faites entre la mise à jour et le retour arrière sont perdues : planifiez la mise à jour hors des heures de travail.
