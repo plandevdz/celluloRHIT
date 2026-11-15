@@ -5,6 +5,7 @@
 //! normalisations) et se teste sans infrastructure.
 
 pub mod cases;
+pub mod inventory;
 pub mod legacy;
 pub mod movements;
 pub mod needs;

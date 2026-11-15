@@ -4,6 +4,7 @@ pub mod auth;
 pub mod cases;
 pub mod employees;
 pub mod imports;
+pub mod inventory;
 pub mod movements;
 pub mod referentials;
 pub mod reprise;
@@ -73,6 +74,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .merge(vehicles::routes())
         .merge(referentials::routes())
         .merge(software::routes())
+        .merge(inventory::routes())
         .fallback(not_found)
         .layer(middleware::from_fn(require_client_header))
 }

@@ -6,6 +6,7 @@ pub mod config;
 pub mod documents;
 pub mod error;
 pub mod idempotency;
+pub mod labels;
 pub mod pdf;
 pub mod personnel_xlsx;
 pub mod routes;
