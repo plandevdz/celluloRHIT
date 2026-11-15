@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 « Celluloplast | Parcours salarié » : application **web** (navigateur, aucun installateur) qui remplace Power Apps / Power Automate pour les arrivées, le parc IT, les formations, les mutations et les départs. Serveur Rust + PostgreSQL + interface React, déployés en **Docker** sur un serveur Debian de l'entreprise et joints par leur IP en HTTPS. Tout (code métier, UI, messages d'erreur, commits) est **en français** ; les noms arabes et les accents doivent être préservés partout.
 
-Le cahier des charges fait foi et se lit dans cet ordre : `01-Metier.md` → `03-UI-UX.md` → `04-Donnees.md` → `02-Technique.md` → `05-Recette.md` (scénarios R01–R14). Le `README.md` porte la préparation du serveur et l'ordre des livraisons. `deploy/README.md` est le guide d'installation et la liste de ce qui est livré ou non. `modeles/` contient les gabarits papier des décharges, que reproduit `crates/server/src/pdf.rs`.
+Le cahier des charges fait foi et se lit dans cet ordre : `01-Metier.md` → `03-UI-UX.md` → `04-Donnees.md` → `02-Technique.md` → `05-Recette.md` (scénarios R01–R14). Le `README.md` porte la préparation du serveur et l'ordre des livraisons. `deploy/README.md` est le guide d'installation et la liste de ce qui est livré ou non. `modeles/` contient les gabarits papier des décharges, que reproduit `crates/server/src/pdf.rs`. `docs/correspondance-sharepoint.md` donne la destination des 184 champs de l'ancienne application (à tenir à jour si un champ change de place).
 
 ## Commandes
 
@@ -20,6 +20,7 @@ cargo test -p domain                         # règles pures, sans base
 cargo test -p server --test parcours r03     # un seul scénario de recette
 cargo test -p server --test lot1             # périmètre, présence, preuves, avis
 cargo test -p server --test lot2_excel       # import/export Excel
+cargo test -p server --test livraison1       # 9 scénarios de la 1re livraison (fiche, profils, équipements, Excel v2)
 cargo test -p server --test mutation_depart  # R09, R10 (aussi : vehicules, logiciels, inventaire, graph, reprise)
 cargo run -p server -- serve                 # API + web sur :8080 (migrations au démarrage)
 cargo run -p server -- worker                # avis + PDF en attente (processus séparé)
@@ -82,4 +83,4 @@ Dépôt : https://github.com/plandevdz/celluloRHIT (potentiellement public : auc
 
 ## Environnement de développement (poste Windows)
 
-Docker Desktop peut être indisponible : un PostgreSQL 17 portable (binaires EDB, `initdb`/`pg_ctl` sur le port 55432) suffit pour les tests. Le disque C: est presque plein : compiler avec `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` réduit `target/` à ~1 Go ; un `celluloplast.exe` en cours d'exécution bloque la recompilation (arrêter les serveurs locaux d'abord).
+Docker Desktop peut être indisponible : un PostgreSQL 17 portable (binaires EDB, `initdb`/`pg_ctl` ; si 55432 tombe dans une plage de ports réservée par Windows, utiliser 54329) suffit pour les tests. Le disque C: est presque plein : compiler avec `CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0` réduit `target/` à ~1 Go ; un `celluloplast.exe` en cours d'exécution bloque la recompilation (arrêter les serveurs locaux d'abord).

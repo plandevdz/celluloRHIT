@@ -33,3 +33,19 @@ Le fichier vierge joint a huit colonnes. ID salarié et Matricule sont du texte,
 - ID applicatif connu → proposer une mise à jour, jamais le remplacement d’identité. À défaut, matricule exact unique → proposer la correspondance. Si les deux identifiants se contredisent, rejeter la ligne. Sans les deux : proposer une création seulement après revue des ressemblances. Aucun rapprochement automatique par le nom seul.
 - Une valeur vide dans une mise à jour signifie « conserver » ; effacement volontaire depuis la fiche et tracé. Ignorer les lignes vides. Refuser les formules dans les champs importés ; exporter en texte les identifiants/contenus pouvant ressembler à une formule.
 - Avant confirmation : rapport nouvelle/modifiée/à revoir/rejetée et motif, affichage avant/après. Appliquer uniquement la sélection valide en transaction. Une ligne ambiguë n’est jamais appliquée ; après correction, nouveau lot traçable. Export filtré par autorisation ; aucun email déclenché par import.
+
+## Évolutions de la première livraison (migration 0003)
+
+| Table | Ajout |
+|---|---|
+| `employees` | `poste_fixe` (ancien champ SharePoint, sens à confirmer), `import_note` (RH/ADMIN), `leaving` + `planned_exit_date` (« en départ »), `primary_line_id` (ligne principale, contrôlée : SIM détenue) |
+| `wilayas` | `latitude`, `longitude` (reprises si présentes, jamais calculées) |
+| `case_needs`, `profile_needs` | catégories `ecran`, `tablette`, `imprimante`, `accessoire` ; `quantity` (vide = 1) |
+
+**Classeur Excel « personnel-v2 ».**
+- Les huit colonnes historiques restent obligatoires et à la même place.
+- Six colonnes facultatives les suivent : Contrat, Profil de poste, Manager (matricule), Manager (ID salarié), Manager (nom, pour information), Wilayas (codes).
+- Un ancien classeur à huit colonnes reste accepté : les colonnes absentes valent « conserver ».
+- **Wilayas** : `16;31` remplace la liste ; `aucune` la vide.
+- **Manager** : il est désigné par matricule ou par ID, jamais par le nom. Un nom seul produit une « attention » et ne modifie rien. Un manager égal à la personne, ou un ID et un matricule contradictoires, rejettent la ligne.
+- **Aperçu** : création, modification, inchangée, conflit à arbitrer, erreur (rejetée).

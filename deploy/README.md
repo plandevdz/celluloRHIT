@@ -220,7 +220,8 @@ Cette commande crée deux sites, un compte par rôle (dont un IT + FORMATION), d
 - parc IT : actifs (marque, modèle, Intune, garantie, état, matériel partagé « en service »), accessoires, SIM et lignes (forfait, type) ;
 - remises et restitutions partielles avec décharge PDF et scan signé ; demandes ponctuelles et clôture contrôlée ;
 - lot 1 (données filtrées par équipe, « Confirmer l'arrivée », fin de tâche avec preuve, avis honnêtes, sauvegarde) et lot 2 (Excel du personnel) ;
-- **référentiels** : profils de poste (besoins et formations suggérés à l'annonce), wilayas, contrat, poste fixe, manager relié ;
+- **référentiels** : profils de poste administrables (besoins distincts avec quantités — PC, écran, tablette, imprimante, accessoire, téléphone, SIM — et formations suggérées à l'annonce), wilayas multiples et filtrables, contrat, manager relié, ligne principale, « en départ » ;
+- **Excel du personnel v2** : contrat, profil, manager (matricule ou ID) et wilayas exportés et réimportés sans perte ; les anciens classeurs à huit colonnes restent acceptés ;
 - **logiciels** : abonnements ou licences perpétuelles, sièges attribués sous verrou, libération selon le contrat, alerte de renouvellement à l'IT ;
 - **véhicules RH** : propriété ou location, contrats renouvelés sans effacement, pièces (assurance, contrôle technique…), entretien par date ou kilométrage, remise, restitution et retour au loueur distincts, alertes d'échéance au RH ;
 - **étiquettes QR** (planche A4 ou unitaire) et **campagnes d'inventaire** (poste de scan, écarts, arbitrages, rapport Excel) ;
@@ -244,7 +245,7 @@ sudo docker compose up -d --build                        # migrations 0003 à 00
 sudo docker compose logs app | grep -i -E "migr|démarrée|error"
 ```
 
-Le `.env` existant reste valable : les nouvelles variables ont des valeurs par défaut (voir `.env.example`). Retour arrière : comme pour la 0002, restaurer la sauvegarde prise juste avant.
+Le `.env` existant reste valable : les nouvelles variables ont des valeurs par défaut (voir `.env.example`). Les fiches et dossiers existants ne reçoivent aucune valeur rétroactive : profil, contrat, wilayas et ligne principale restent vides (« — ») jusqu'à saisie ou reprise. Les classeurs Excel exportés avant cette version se réimportent tels quels. Retour arrière : comme pour la 0002, restaurer la sauvegarde prise juste avant.
 
 ## Raccorder Exchange Online (envoi des avis)
 

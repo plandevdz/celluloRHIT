@@ -53,3 +53,26 @@ Légende : **auto** = test automatisé exécuté et réussi (PostgreSQL 17 réel
 | RP | `backup.sh` chiffré (GPG à clé publique, code 3 si non configuré) ; `restore-isole.sh` (VM de test, garde-fous, arrêt avant démarrage) | `test-backup.sh` (21 contrôles) et `test-restore.sh` (22 contrôles) avec faux docker : **oui** ; restauration PostgreSQL + documents : **exécutée et réussie** hors Docker | — | **recette complète sur VM avec vrai Docker : NON EXÉCUTÉE** (sauvegarde → restauration → dossier, rôles, empreintes PDF/scan, certificat racine Caddy avant/après) |
 
 Non validé à ce jour : l'impression des étiquettes QR (rendu PDF non relu à l'écran sur le poste de développement), le rendu des noms arabes dans les PDF (les glyphes sont présents, mais la liaison et le sens de lecture ne sont pas traités) et l'impression papier. La présence d'un en-tête PDF ne vaut pas validation.
+
+## Première livraison : neuf scénarios (état au 15/11/2026)
+
+Légende :
+- **nav** : joué dans un navigateur sur une instance locale isolée, avec données fictives ;
+- **auto** : test automatisé `crates/server/tests/livraison1.rs`, sur PostgreSQL 17 réel.
+
+| # | Scénario | Résultat |
+|---|---|---|
+| 1 | Arrivée minimale en cinq champs | **nav** : ONB créé, vu par IT et Formation, aucune tâche. **auto** : `s1_s2_…` |
+| 2 | Fiche terrain : Chéraga, manager, trois wilayas | **nav** : manager relié depuis la fiche ; le filtre de chaque wilaya retrouve la personne ; le site reste Chéraga. **auto** : `s1_s2_…` |
+| 3 | Profil : Xena retiré, une formation gardée, deux écrans ajoutés ; profil modifié ensuite | **nav** : le dossier reflète les choix et reste identique après modification du profil. **auto** : `s3_a_s7_…` |
+| 4 | Formation réalisée avant la remise ; boîte cPanel ; M365 indépendant | **auto** : `s3_a_s7_…` (non rejoué au navigateur) |
+| 5 | Portable à la place du fixe, SIM, un écran sur deux | **nav** : motif exigé ; affichage « Portable remis à la place du fixe », « SIM remise », « 1 écran sur 2 remis » ; tâche écran refusée (« 1/2 remis ») ; PDF relu, limité aux trois articles remis. **auto** : `s3_a_s7_…` |
+| 6 | Présence confirmée avec équipement manquant ; demande de carte après clôture | **auto** : `s3_a_s7_…` (seul le Graphiste est ciblé ; l'ONB reste clos) |
+| 7 | Confidentialité Graphiste ; IT + FORMATION | **auto** : `s3_a_s7_…` (contrat, note RH, commentaire IT et décharges absents du JSON ; accès directs 403) |
+| 8 | Excel aller-retour, homonymes, manager ambigu, ligne incomplète, ancien modèle | **auto** : `s8_s9_…` (aucun dossier, aucune tâche, aucun avis) |
+| 9 | Fiches et dossiers antérieurs | **auto** : `s8_s9_…` (aucun profil, contrat, présence ni remise inventés : affichés « — ») |
+
+Restent à faire sur site :
+- jouer les scénarios 4, 6, 7, 8 et 9 dans le navigateur ;
+- ouvrir le classeur exporté dans Excel et dans LibreOffice ;
+- imprimer la décharge.

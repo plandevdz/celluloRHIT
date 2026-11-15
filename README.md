@@ -84,8 +84,23 @@ Par rapport à la v1 : cinq rôles cumulables, cinq champs pour annoncer une arr
 | 4. Mutation, démission, traitements à échéance (R09, R10) | oui | oui | oui (départ) | — |
 | 5. Reprise des listes SharePoint (T08) | oui | oui | oui (aperçu, décisions) | reprise à blanc avec les vrais exports |
 | 5. Pilote | non | — | — | — |
+| **1re livraison** (fiche complète, profils administrables, équipements distincts, Excel v2) : 9 scénarios | oui | oui (`livraison1`) | oui (scénarios 1, 2, 3, 5) | scénarios 4, 6 à 9 au navigateur ; classeur ouvert dans Excel et LibreOffice |
 
-Le détail par scénario est dans 05-Recette.md. Étape suivante : pilote sur un site (reprise SharePoint à blanc, raccordement Exchange vers une boîte de test, impression et douchette réelles, restauration sur VM).
+Le détail par scénario est dans 05-Recette.md. La destination de chaque champ de l'ancienne application est dans `docs/correspondance-sharepoint.md`.
+
+### Feuille de route après la première livraison
+Ces sujets sont déjà présents dans le code, mais leur recette n'a pas bloqué la première livraison. Ils seront recettés chacun avec son lot :
+1. véhicules et logiciels (R11, R12) ;
+2. étiquettes QR et inventaire (R07), avec la douchette réelle ;
+3. mutation et départ complet (R09, R10), avec les wilayas cibles d'une mutation, qui restent **à livrer** ;
+4. raccordement Exchange et SharePoint (R13), sur une boîte et un site de test ;
+5. modèles de tâches paramétrables (délai, instructions, ordre d'affichage), **à livrer**. Aujourd'hui, les tâches sont générées besoin par besoin.
+
+Points à arbitrer avant la reprise réelle :
+- sens de « Poste fixe » ;
+- reprise de « Carte de visite » ;
+- droits des anciens profils « Manager », « Moyens généraux » et « Responsable » ;
+- formateurs sans compte. Étape suivante : pilote sur un site (reprise SharePoint à blanc, raccordement Exchange vers une boîte de test, impression et douchette réelles, restauration sur VM).
 
 Pour chaque tranche : livrer code, migrations, tests d’intégration, données fictives, démonstration dans un navigateur sur poste Windows et écarts restants. Ne pas activer les anciens flux ni envoyer de vrais mails pendant les tests. Ne pas intégrer de secrets dans le projet. Avant production seulement : confirmer matériel, IP/DNS, expéditeur Exchange, bibliothèque documentaire, cibles de sauvegarde et destinataires d’escalade.
 

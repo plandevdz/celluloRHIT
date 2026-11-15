@@ -50,3 +50,24 @@ Depuis toute fiche de salarié actif ou à venir, RH/Admin ouvre DEM-xxxxx, choi
 
 ## M07 — Exploitation RH et états des lieux
 Import/export Excel de Personnel, prévisualisation et rapport ligne par ligne. Importer des fiches ne crée pas de parcours, de comptes ni d’emails. Rien n’est supprimé par absence du fichier. Exporter par site, statut et période ; périmètre sécurisé côté serveur. États attendus : salariés à venir/actifs/sortis, demandes ouvertes, tâches sans responsable/en retard, accès à couper, licences disponibles, actifs et véhicules par détenteur, retours et signatures manquants, écarts d’inventaire et échéances véhicule/logiciel. Les actions courantes ne doivent demander que les informations indispensables à leur exécution.
+
+## Première livraison : fiche complète, profils administrables, équipements distincts
+
+La correspondance des 184 champs de l'ancienne application est tenue dans `docs/correspondance-sharepoint.md`.
+
+- **Fiche personnel.** Elle porte :
+  - contrat (RH et ADMIN seulement) et profil de poste ;
+  - manager choisi parmi les fiches (jamais soi-même) ;
+  - aucune, une ou plusieurs wilayas couvertes, sans lien avec le site de rattachement ;
+  - ligne mobile principale, choisie parmi les SIM réellement détenues ;
+  - indicateur « en départ » avec date prévue.
+  « En départ » reste distinct du statut : la personne reste dans l'effectif. Créer un départ (M06) pose l'indicateur ; la sortie effective le retire.
+- **Profils de poste.** Le RH et l'ADMIN les créent, les modifient et les désactivent. Un profil suggère :
+  - des besoins distincts avec quantités : PC (préférence fixe ou portable), écran, tablette, imprimante, accessoire, téléphone, SIM, comptes, cartes, véhicule ;
+  - des formations du catalogue réel.
+  Les suggestions sont copiées dans le dossier à l'annonce, avec leur origine. Modifier ou désactiver le profil ensuite ne change aucun dossier existant. Un choix manuel du RH n'est jamais écrasé par un profil appliqué après coup.
+- **Équipements distincts.** Chaque catégorie a sa tâche et son compteur :
+  - une SIM ne solde pas une tâche PC ;
+  - un écran remis sur deux demandés laisse la tâche ouverte (« 1 écran sur 2 remis ») ;
+  - un portable remis à la place d'un fixe exige un motif, affiché « Portable remis à la place du fixe ».
+- **Anciens champs ambigus.** Les décisions sont listées en fin de `docs/correspondance-sharepoint.md`. Trois points restent à arbitrer : « Poste fixe », « Carte de visite » et les profils d'utilisateurs « Manager » et « Moyens généraux ».
