@@ -353,6 +353,17 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     } else {
         json!([])
     };
+    let licenses: Value = if full {
+        crate::routes::software::employee_licenses_json(&mut conn, id).await?
+    } else {
+        json!([])
+    };
+    // Véhicules : parc RH, visible du RH et de l'ADMIN.
+    let vehicles: Value = if hr {
+        crate::routes::vehicles::held_vehicles_json(&mut conn, id).await?
+    } else {
+        json!([])
+    };
     let trainings: Value = if hr || user.has(Role::Formation) {
         sqlx::query_scalar(
             "SELECT coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'name', tc.name, 'status', t.status,
@@ -399,6 +410,8 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
         "positions": positions,
         "cases": cases,
         "holdings": holdings,
+        "licenses": licenses,
+        "vehicles": vehicles,
         "trainings": trainings,
     })))
 }

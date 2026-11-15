@@ -229,6 +229,40 @@ pub async fn check_deadlines(state: &AppState) -> anyhow::Result<()> {
         }
         tx.commit().await?;
     }
+    // Abonnements logiciels : alerte IT avant renouvellement.
+    let renewals = crate::routes::software::renewals_json(&mut conn, today, state.config.alert_days)
+        .await
+        .map_err(|e| anyhow::anyhow!("échéances logiciels : {e}"))?;
+    for it in renewals.as_array().cloned().unwrap_or_default() {
+        let Some(id) = it["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) else { continue };
+        let overdue = it["overdue"].as_bool().unwrap_or(false);
+        let end = it["end_date"].as_str().unwrap_or("-").to_string();
+        let due_key = format!("{}:{end}", if overdue { "depassee" } else { "proche" });
+        let mut tx = state.pool.begin().await?;
+        let fresh = sqlx::query("INSERT INTO alerts_sent (kind, entity_id, due_key) VALUES ('logiciel', $1, $2) ON CONFLICT DO NOTHING")
+            .bind(id)
+            .bind(&due_key)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            == 1;
+        if fresh {
+            let label = it["label"].as_str().unwrap_or_default();
+            let date = chrono::NaiveDate::parse_from_str(&end, "%Y-%m-%d").ok();
+            let renew = if it["auto_renew"].as_bool().unwrap_or(false) { " (renouvellement automatique prévu au contrat)" } else { "" };
+            enqueue_system(
+                &mut tx,
+                "echeance_logiciel",
+                None,
+                &["IT"],
+                &format!("{label} — échéance {}", if overdue { "dépassée" } else { "proche" }),
+                &format!("Abonnement {label} : échéance le {}{renew}.\nVérifiez le renouvellement et les sièges dans le parc IT.", fr(date)),
+                Some("/parc?onglet=logiciels"),
+            )
+            .await?;
+        }
+        tx.commit().await?;
+    }
     Ok(())
 }
 

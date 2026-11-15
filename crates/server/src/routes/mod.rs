@@ -7,6 +7,7 @@ pub mod imports;
 pub mod movements;
 pub mod referentials;
 pub mod reprise;
+pub mod software;
 pub mod tasks;
 pub mod trainings;
 pub mod vehicles;
@@ -71,6 +72,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .merge(reprise::routes(state.config.max_upload_bytes))
         .merge(vehicles::routes())
         .merge(referentials::routes())
+        .merge(software::routes())
         .fallback(not_found)
         .layer(middleware::from_fn(require_client_header))
 }
