@@ -9,6 +9,9 @@ CREATE TABLE wilayas (
     name        text NOT NULL,
     region      text,
     sort_order  integer,
+    -- Coordonnées de la source si elles existent ; jamais calculées.
+    latitude    numeric(9, 6),
+    longitude   numeric(9, 6),
     active      boolean NOT NULL DEFAULT true,
     created_at  timestamptz NOT NULL DEFAULT now()
 );
@@ -17,7 +20,14 @@ CREATE TABLE wilayas (
 ALTER TABLE employees
     ADD COLUMN contract_type text CHECK (contract_type IS NULL OR contract_type IN
         ('cdi', 'cdd', 'stage', 'interim', 'apprentissage', 'consultant')),
-    ADD COLUMN landline text;
+    -- Ancien champ Personnel.PosteFixe, repris tel quel : son sens
+    -- (ordinateur fixe ? téléphone fixe ?) reste à confirmer par le RH.
+    ADD COLUMN poste_fixe text,
+    -- Ancienne « RemarqueImport » : note de reprise, visible du RH seul.
+    ADD COLUMN import_note text,
+    -- « En départ » : la personne prépare sa sortie mais n'est pas sortie.
+    ADD COLUMN leaving boolean NOT NULL DEFAULT false,
+    ADD COLUMN planned_exit_date date;
 
 -- Wilayas couvertes (commerciaux terrain) : information organisationnelle.
 CREATE TABLE employee_wilayas (
@@ -25,6 +35,14 @@ CREATE TABLE employee_wilayas (
     wilaya_id    uuid NOT NULL REFERENCES wilayas(id),
     PRIMARY KEY (employee_id, wilaya_id)
 );
+
+-- ------------------------------------------------------------ besoins : équipements distincts
+-- Écran, tablette, imprimante et accessoire deviennent des besoins à part
+-- entière, avec quantité (ex. deux écrans), au lieu d'une note libre.
+ALTER TABLE case_needs DROP CONSTRAINT case_needs_category_check;
+ALTER TABLE case_needs ADD CONSTRAINT case_needs_category_check CHECK (category IN (
+    'pc', 'ecran', 'tablette', 'imprimante', 'accessoire', 'telephone', 'sim',
+    'email_pro', 'xena', 'intelix', 'carte_visite', 'vehicule', 'formation'));
 
 -- ------------------------------------------------------------ profils de poste
 -- Un profil suggère des besoins ; le modifier ne change aucun dossier
@@ -46,7 +64,8 @@ CREATE UNIQUE INDEX job_profiles_name_uq ON job_profiles (lower(name));
 
 CREATE TABLE profile_needs (
     profile_id  uuid NOT NULL REFERENCES job_profiles(id) ON DELETE CASCADE,
-    category    text NOT NULL CHECK (category IN ('pc', 'telephone', 'sim', 'email_pro', 'xena', 'intelix', 'carte_visite', 'vehicule')),
+    category    text NOT NULL CHECK (category IN ('pc', 'ecran', 'tablette', 'imprimante', 'accessoire', 'telephone', 'sim',
+                                               'email_pro', 'xena', 'intelix', 'carte_visite', 'vehicule')),
     quantity    integer CHECK (quantity IS NULL OR quantity BETWEEN 1 AND 999),
     preference  text CHECK (preference IS NULL OR preference IN ('fixe', 'portable', 'sans_preference')),
     detail      text,
@@ -97,6 +116,10 @@ ALTER TABLE assets
 ALTER TABLE mobile_lines
     ADD COLUMN plan       text,
     ADD COLUMN line_type  text CHECK (line_type IS NULL OR line_type IN ('voix', 'data', 'voix_data'));
+
+-- Ligne principale du salarié : choisie parmi les lignes dont il détient
+-- réellement la SIM (jamais saisie en texte libre).
+ALTER TABLE employees ADD COLUMN primary_line_id uuid REFERENCES mobile_lines(id);
 
 -- Garde reprise depuis l'ancienne application : mouvement distinct d'une
 -- remise réelle (aucune décharge n'est fabriquée pour le passé).

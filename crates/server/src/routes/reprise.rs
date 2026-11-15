@@ -142,7 +142,15 @@ impl List {
     /// Colonnes attendues (obligatoires marquées), pour l'écran et le contrôle.
     fn columns(self) -> Vec<(&'static str, bool)> {
         match self {
-            List::Wilayas => vec![("CodeWilaya", true), ("Wilaya", false), ("Libelle", false), ("Region", false), ("OrdreRegion", false)],
+            List::Wilayas => vec![
+                ("CodeWilaya", true),
+                ("Wilaya", false),
+                ("Libelle", false),
+                ("Region", false),
+                ("OrdreRegion", false),
+                ("Latitude", false),
+                ("Longitude", false),
+            ],
             List::CatalogueFormations => vec![
                 ("Intitule", true),
                 ("Categorie", false),
@@ -189,6 +197,9 @@ impl List {
                 ("PlateformeMessagerie", false),
                 ("M365Operationnel", false),
                 ("DateActivationM365", false),
+                ("ManagerEmail", false),
+                ("LignePrincipale", false),
+                ("RemarqueImport", false),
             ],
             List::MaterielIT => vec![
                 ("ID", false),
@@ -490,6 +501,8 @@ struct WilayaData {
     name: String,
     region: Option<String>,
     sort_order: Option<i32>,
+    latitude: Option<f64>,
+    longitude: Option<f64>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -515,6 +528,8 @@ struct ProfileNeed {
     category: String,
     preference: Option<String>,
     detail: Option<String>,
+    #[serde(default)]
+    quantity: Option<i32>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -547,10 +562,15 @@ struct PersonData {
     contract_type: Option<String>,
     profile_id: Option<Uuid>,
     wilaya_ids: Vec<Uuid>,
-    landline: Option<String>,
+    poste_fixe: Option<String>,
     email_pro: Option<String>,
     email_platform: Option<String>,
     m365_verified_at: Option<DateTime<Utc>>,
+    #[serde(default)]
+    leaving: bool,
+    import_note: Option<String>,
+    manager_email: Option<String>,
+    primary_line: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -737,7 +757,21 @@ async fn plan_wilaya(conn: &mut PgConnection, row: &Row, known: Option<Uuid>, pl
         plan.err("CodeWilaya et Wilaya (ou Libellé) obligatoires");
         return Ok(());
     };
-    let d = WilayaData { code, name, region: row.text(&["Region", "Région"]), sort_order: opt_int(row, &["OrdreRegion"], plan, "OrdreRegion") };
+    let coord = |names: &[&str], plan: &mut Plan, label: &str| match row.number(names) {
+        Ok(v) => v,
+        Err(e) => {
+            plan.err(format!("{label} : {e}"));
+            None
+        }
+    };
+    let d = WilayaData {
+        code,
+        name,
+        region: row.text(&["Region", "Région"]),
+        sort_order: opt_int(row, &["OrdreRegion"], plan, "OrdreRegion"),
+        latitude: coord(&["Latitude"], plan, "Latitude"),
+        longitude: coord(&["Longitude"], plan, "Longitude"),
+    };
     let existing: Option<(Uuid, String, Option<String>)> = sqlx::query_as("SELECT id, name, region FROM wilayas WHERE code = $1 OR id = $2")
         .bind(code)
         .bind(known)
@@ -844,28 +878,24 @@ async fn plan_profile(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Opti
     let mut needs: Vec<ProfileNeed> = Vec::new();
     let material = row.list(&["MaterielStandard", "Matériel standard"]);
     let has = |label: &str| material.iter().any(|m| fold(m) == fold(label));
-    let mut extras: Vec<String> = material
-        .iter()
-        .filter(|m| !["pc portable", "pc fixe", "smartphone"].contains(&fold(m).as_str()))
-        .cloned()
-        .collect();
-    extras.sort();
+    // Chaque matériel standard devient un besoin distinct (aucune note libre).
+    let recognised = ["pc portable", "pc fixe", "smartphone", "ecran", "tablette", "imprimante", "accessoire"];
+    let extras: Vec<String> = material.iter().filter(|m| !recognised.contains(&fold(m).as_str())).cloned().collect();
+    for e in &extras {
+        plan.warn(format!("Matériel standard « {e} » non reconnu : non repris"));
+    }
     if has("PC portable") || has("PC fixe") {
         let pref = match (has("PC portable"), has("PC fixe")) {
             (true, false) => Some("portable"),
             (false, true) => Some("fixe"),
             _ => Some("sans_preference"),
         };
-        needs.push(ProfileNeed {
-            category: "pc".into(),
-            preference: pref.map(String::from),
-            detail: (!extras.is_empty()).then(|| format!("Matériel standard : {}", extras.join(", "))),
-        });
-    } else if !extras.is_empty() {
-        plan.info(format!("Matériel standard sans PC : {} (noté dans la description)", extras.join(", ")));
+        needs.push(ProfileNeed { category: "pc".into(), preference: pref.map(String::from), ..Default::default() });
     }
-    if has("Smartphone") {
-        needs.push(ProfileNeed { category: "telephone".into(), ..Default::default() });
+    for (label, cat) in [("Smartphone", "telephone"), ("Écran", "ecran"), ("Tablette", "tablette"), ("Imprimante", "imprimante"), ("Accessoire", "accessoire")] {
+        if has(label) {
+            needs.push(ProfileNeed { category: cat.into(), ..Default::default() });
+        }
     }
     let flags = [
         (&["BesoinEmailPro"][..], "email_pro"),
@@ -887,14 +917,7 @@ async fn plan_profile(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Opti
             None => plan.warn(format!("Formation « {t} » absente du catalogue (reprenez CatalogueFormations d'abord)")),
         }
     }
-    let mut description = row.text(&["Description"]);
-    if needs.iter().all(|n| n.category != "pc") && !extras.is_empty() {
-        let add = format!("Matériel standard : {}", extras.join(", "));
-        description = Some(match description {
-            Some(d) => format!("{d}\n{add}"),
-            None => add,
-        });
-    }
+    let description = row.text(&["Description"]);
     if let Some(m) = row.text(&["MessageriePrevue", "Messagerie prévue"]) {
         plan.info(format!("Messagerie prévue « {m} » : la plateforme reste choisie par l'IT, non reprise"));
     }
@@ -929,8 +952,17 @@ async fn plan_person(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Optio
         return Ok(());
     };
     let status = choice(row.text(&["Statut"]), legacy::employee_status, plan, "Statut").unwrap_or_else(|| "actif".into());
-    if row.text(&["Statut"]).map(|s| fold(&s) == "en depart").unwrap_or(false) {
-        plan.info("« En départ » repris comme actif : ouvrez un dossier de départ dans l'application");
+    // « En départ » : présent, prépare sa sortie ; jamais compté comme sorti.
+    let leaving = row.text(&["Statut"]).map(|s| fold(&s) == "en depart").unwrap_or(false);
+    if leaving {
+        plan.info("« En départ » repris : la personne reste présente ; le dossier de départ s'ouvre dans l'application");
+    }
+    // Décisions sur les anciens champs (voir docs/correspondance-sharepoint.md).
+    if let Some(c) = row.text(&["CarteVisite"]) {
+        plan.info(format!("CarteVisite « {c} » non reprise : demandée, produite ou détenue ? Une carte se demande par une demande ponctuelle"));
+    }
+    if let Some(b) = row.text(&["BesoinEmailPro"]) {
+        plan.info(format!("BesoinEmailPro « {b} » non repris comme besoin : seule l'adresse réellement créée (EmailPro) est reprise"));
     }
     let mut d = PersonData {
         first_name,
@@ -946,7 +978,11 @@ async fn plan_person(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Optio
         manager_source_id: lookup_id(row, "Manager"),
         manager_name: row.text(&["ManagerNom"]),
         contract_type: choice(row.text(&["TypeContrat", "Type de contrat"]), legacy::contract_type, plan, "TypeContrat"),
-        landline: row.text(&["PosteFixe", "Poste fixe"]),
+        poste_fixe: row.text(&["PosteFixe", "Poste fixe"]),
+        leaving,
+        import_note: row.text(&["RemarqueImport", "Remarque import"]),
+        manager_email: row.text(&["ManagerEmail"]).map(|e| e.to_lowercase()),
+        primary_line: row.text(&["LignePrincipale", "Ligne principale"]).map(|n| n.chars().filter(|c| !c.is_whitespace()).collect()),
         ..Default::default()
     };
     match row.text(&["Site"]) {
@@ -1251,7 +1287,22 @@ async fn plan_assignment(conn: &mut PgConnection, row: &Row, known: Option<Uuid>
     d.started_at = opt_instant(row, &["DateAttribution", "Date d'attribution"], plan, "DateAttribution");
     d.ended_at = opt_instant(row, &["DateRestitution", "Date de restitution"], plan, "DateRestitution");
     d.condition = row.text(&["EtatRetour", "État au retour"]);
-    d.note = row.text(&["Observations"]);
+    // Intervenants de l'ancienne application : conservés dans l'observation
+    // (ce ne sont pas des comptes de la nouvelle application).
+    let who = |n: &[&str], e: &[&str]| match (row.text(n), row.text(e)) {
+        (Some(a), Some(b)) => Some(format!("{a} <{b}>")),
+        (Some(a), None) | (None, Some(a)) => Some(a),
+        _ => None,
+    };
+    let parts: Vec<String> = [
+        row.text(&["Observations"]),
+        who(&["AttribueParNom"], &["AttribueParEmail"]).map(|w| format!("attribué par {w}")),
+        who(&["RecuParNom"], &["RecuParEmail"]).map(|w| format!("restitution reçue par {w}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    d.note = (!parts.is_empty()).then(|| parts.join(" — "));
     if let (Some(a), Some(b)) = (d.started_at, d.ended_at) {
         if b < a {
             plan.err("Date de restitution antérieure à l'attribution");
@@ -1428,7 +1479,22 @@ async fn plan_vehicle_assignment(conn: &mut PgConnection, row: &Row, known: Opti
         km_start: opt_int(row, &["KmDepart", "Km départ"], plan, "KmDepart"),
         km_end: opt_int(row, &["KmRetour", "Km retour"], plan, "KmRetour"),
         condition_start: row.text(&["EtatDepart", "État au départ"]),
-        note_end: row.text(&["ObservationsRetour", "Observations au retour"]),
+        note_end: {
+            let who = |n: &str, e: &str| match (row.text(&[n]), row.text(&[e])) {
+                (Some(a), Some(b)) => Some(format!("{a} <{b}>")),
+                (Some(a), None) | (None, Some(a)) => Some(a),
+                _ => None,
+            };
+            let parts: Vec<String> = [
+                row.text(&["ObservationsRetour", "Observations au retour"]),
+                who("RemisParNom", "RemisParEmail").map(|w| format!("remis par {w}")),
+                who("RecuParNom", "RecuParEmail").map(|w| format!("reçu par {w}")),
+            ]
+            .into_iter()
+            .flatten()
+            .collect();
+            (!parts.is_empty()).then(|| parts.join(" — "))
+        },
         employee_id: None,
     };
     if let (Some(a), Some(b)) = (d.km_start, d.km_end) {
@@ -1728,6 +1794,7 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
 
     let mut counts: HashMap<&str, i64> = HashMap::new();
     let mut managers: Vec<(Uuid, PersonData)> = Vec::new();
+    let mut primary_lines: Vec<(Uuid, String)> = Vec::new();
     for r in &pending {
         let (result, result_id, message): (&str, Option<Uuid>, Option<String>) = match (r.proposal.as_str(), r.decision.as_deref()) {
             ("rejet", _) => ("rejete", None, Some("ligne rejetée à l'aperçu".into())),
@@ -1740,7 +1807,12 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
                     Ok((result, entity_id, extra)) => {
                         sqlx::query("RELEASE SAVEPOINT reprise_ligne").execute(&mut *tx).await?;
                         if let Some(p) = extra {
-                            managers.push((entity_id, p));
+                            if let Some(l) = &p.primary_line {
+                                primary_lines.push((entity_id, l.clone()));
+                            }
+                            if p.manager_title.is_some() || p.manager_source_id.is_some() || p.manager_email.is_some() {
+                                managers.push((entity_id, p));
+                            }
                         }
                         (result, Some(entity_id), None)
                     }
@@ -1771,7 +1843,7 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     // Liens entre fiches du Personnel : le manager est relié après coup.
     let mut linked = 0;
     for (emp, p) in &managers {
-        let manager: Option<Uuid> = match (&p.manager_source_id, &p.manager_title) {
+        let mut manager: Option<Uuid> = match (&p.manager_source_id, &p.manager_title) {
             (Some(sid), _) => legacy_entity(&mut tx, "Personnel", sid).await?,
             (None, Some(t)) => {
                 let ids: Vec<Uuid> = sqlx::query_scalar(
@@ -1784,6 +1856,18 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
             }
             _ => None,
         };
+        if manager.is_none() {
+            if let Some(email) = &p.manager_email {
+                let ids: Vec<Uuid> = sqlx::query_scalar(
+                    "SELECT DISTINCT employee_id FROM employee_accounts WHERE system = 'email' AND lower(identifier) = $1",
+                )
+                .bind(email)
+                .fetch_all(&mut *tx)
+                .await?;
+                manager = (ids.len() == 1).then(|| ids[0]);
+            }
+        }
+        // Non résolu : le nom reste affiché comme « à rattacher » sur la fiche.
         if let Some(m) = manager.filter(|m| m != emp) {
             sqlx::query(
                 "UPDATE employee_positions SET manager_employee_id = $2,
@@ -1796,6 +1880,20 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
             .await?;
             linked += 1;
         }
+    }
+    // Ligne principale : seulement si le salarié détient déjà la SIM de cette
+    // ligne (reprise des lignes faite avant) ; sinon rien n'est inventé.
+    for (emp, number) in &primary_lines {
+        sqlx::query(
+            "UPDATE employees SET primary_line_id = l.id FROM mobile_lines l
+              WHERE employees.id = $1 AND l.number = $2
+                AND EXISTS (SELECT 1 FROM sim_cards s JOIN assignments a ON a.sim_id = s.id AND a.ended_at IS NULL
+                             WHERE s.line_id = l.id AND a.employee_id = $1)",
+        )
+        .bind(emp)
+        .bind(number)
+        .execute(&mut *tx)
+        .await?;
     }
     let summary = json!({ "resultats": counts, "managers_relies": linked });
     sqlx::query(
@@ -1863,15 +1961,18 @@ async fn apply_row(
         List::Wilayas => {
             let d: WilayaData = data(&r.resolved)?;
             let id: Uuid = sqlx::query_scalar(
-                "INSERT INTO wilayas (code, name, region, sort_order) VALUES ($1, $2, $3, $4)
+                "INSERT INTO wilayas (code, name, region, sort_order, latitude, longitude) VALUES ($1, $2, $3, $4, $5, $6)
                  ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name, region = coalesce(EXCLUDED.region, wilayas.region),
-                        sort_order = coalesce(EXCLUDED.sort_order, wilayas.sort_order)
+                        sort_order = coalesce(EXCLUDED.sort_order, wilayas.sort_order),
+                        latitude = coalesce(EXCLUDED.latitude, wilayas.latitude), longitude = coalesce(EXCLUDED.longitude, wilayas.longitude)
                  RETURNING id",
             )
             .bind(d.code)
             .bind(&d.name)
             .bind(&d.region)
             .bind(d.sort_order)
+            .bind(d.latitude)
+            .bind(d.longitude)
             .fetch_one(&mut *conn)
             .await?;
             remember(conn, list, r, id, Some(format!("code:{}", d.code)), batch).await?;
@@ -1976,11 +2077,12 @@ async fn apply_row(
                 }
             };
             for n in &d.needs {
-                sqlx::query("INSERT INTO profile_needs (profile_id, category, preference, detail) VALUES ($1, $2, $3, $4)")
+                sqlx::query("INSERT INTO profile_needs (profile_id, category, preference, detail, quantity) VALUES ($1, $2, $3, $4, $5)")
                     .bind(id)
                     .bind(&n.category)
                     .bind(&n.preference)
                     .bind(&n.detail)
+                    .bind(n.quantity)
                     .execute(&mut *conn)
                     .await?;
             }
@@ -1999,9 +2101,7 @@ async fn apply_row(
             let (result, id) = apply_person(conn, user, &d, if update { target } else { None }).await?;
             let natural = d.matricule.as_deref().and_then(domain::text::normalize_matricule).map(|m| format!("matricule:{m}"));
             remember(conn, list, r, id, natural.or_else(|| Some(format!("ligne:{}:{}", batch, r.row_number))), batch).await?;
-            if d.manager_title.is_some() || d.manager_source_id.is_some() {
-                extra = Some(d);
-            }
+            extra = Some(d);
             (result, id)
         }
         List::MaterielIT => {
@@ -2161,15 +2261,25 @@ async fn apply_person(conn: &mut PgConnection, user: &CurrentUser, d: &PersonDat
             ("mis_a_jour", id)
         }
     };
+    if d.leaving {
+        sqlx::query("UPDATE employees SET leaving = true, planned_exit_date = coalesce($2, planned_exit_date) WHERE id = $1 AND status <> 'sorti'")
+            .bind(id)
+            .bind(d.exit_date)
+            .execute(&mut *conn)
+            .await?;
+    }
+    if let Some(note) = &d.import_note {
+        sqlx::query("UPDATE employees SET import_note = coalesce(import_note, $2) WHERE id = $1").bind(id).bind(note).execute(&mut *conn).await?;
+    }
     sqlx::query(
-        "UPDATE employees SET contract_type = coalesce($2, contract_type), landline = coalesce($3, landline),
+        "UPDATE employees SET contract_type = coalesce($2, contract_type), poste_fixe = coalesce($3, poste_fixe),
                 m365_verified_at = coalesce(m365_verified_at, $4), m365_verified_by = CASE WHEN m365_verified_at IS NULL AND $4::timestamptz IS NOT NULL THEN $5 ELSE m365_verified_by END,
                 version = version + 1, updated_at = now()
           WHERE id = $1",
     )
     .bind(id)
     .bind(&d.contract_type)
-    .bind(&d.landline)
+    .bind(&d.poste_fixe)
     .bind(d.m365_verified_at)
     .bind(user.id)
     .execute(&mut *conn)
@@ -2202,7 +2312,7 @@ async fn apply_person(conn: &mut PgConnection, user: &CurrentUser, d: &PersonDat
         .await?;
     }
     // Sortie : statut et fin de la situation, sans dossier de départ.
-    if d.status == "sorti" {
+    if d.status == "sorti" && !d.leaving {
         let is_out: bool = sqlx::query_scalar("SELECT status = 'sorti' FROM employees WHERE id = $1").bind(id).fetch_one(&mut *conn).await?;
         if !is_out {
             sqlx::query("UPDATE employees SET status = 'sorti', exit_date = $2 WHERE id = $1")

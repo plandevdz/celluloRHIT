@@ -86,7 +86,7 @@ const PROFILE_JSON: &str = "jsonb_build_object(
     'active', p.active, 'version', p.version, 'updated_at', p.updated_at,
     'needs', (SELECT coalesce(jsonb_agg(jsonb_build_object('category', n.category, 'quantity', n.quantity,
                      'preference', n.preference, 'detail', n.detail)
-                     ORDER BY array_position(ARRAY['pc','telephone','sim','email_pro','xena','intelix','carte_visite','vehicule'], n.category)), '[]')
+                     ORDER BY array_position(ARRAY['pc','ecran','tablette','imprimante','accessoire','telephone','sim','email_pro','xena','intelix','carte_visite','vehicule'], n.category)), '[]')
                 FROM profile_needs n WHERE n.profile_id = p.id),
     'trainings', (SELECT coalesce(jsonb_agg(jsonb_build_object('catalog_id', c.id, 'name', c.name) ORDER BY c.name), '[]')
                     FROM profile_trainings t JOIN training_catalog c ON c.id = t.catalog_id WHERE t.profile_id = p.id))";

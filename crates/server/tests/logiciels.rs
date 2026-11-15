@@ -69,7 +69,7 @@ async fn r12_dernier_siege_en_parallele(pool: PgPool) {
 
     // Fiche salarié : licence visible pour l'IT, jamais pour le GRAPHISTE.
     let (_, e) = app.call(&it1, Method::GET, &format!("/employees/{loser_emp}"), None).await;
-    assert_eq!(e["licenses"].as_array().unwrap().len(), 1);
+    assert_eq!(e["licenses"].as_array().unwrap_or_else(|| panic!("{e}")).len(), 1);
     let (status, _) = app.call(&graphiste, Method::GET, "/software", None).await;
     assert_eq!(status, StatusCode::FORBIDDEN);
 }

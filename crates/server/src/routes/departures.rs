@@ -312,6 +312,11 @@ async fn create(State(state): State<AppState>, user: CurrentUser, headers: Heade
         AppError::Conflict { .. } => AppError::conflict("un départ est déjà planifié pour ce salarié"),
         other => other,
     })?;
+    sqlx::query("UPDATE employees SET leaving = true, planned_exit_date = $2, version = version + 1, updated_at = now() WHERE id = $1")
+        .bind(i.employee_id)
+        .bind(i.last_day)
+        .execute(&mut *tx)
+        .await?;
     let specs = controls_for(&mut tx, i.employee_id, i.data_transfer).await?;
     insert_controls(&mut tx, departure_id, case_id, &specs, i.last_day, i.cutoff_at).await?;
     let mut roles = vec![Role::It];
@@ -492,6 +497,7 @@ async fn reschedule(State(state): State<AppState>, user: CurrentUser, Path(id): 
         .bind(i.last_day)
         .execute(&mut *tx)
         .await?;
+    sqlx::query("UPDATE employees SET planned_exit_date = $2 WHERE id = $1").bind(d.employee_id).bind(i.last_day).execute(&mut *tx).await?;
     sqlx::query(
         "UPDATE tasks SET due_date = CASE WHEN gen_key LIKE 'off:compte:%' THEN ($3 AT TIME ZONE 'Africa/Algiers')::date ELSE $2 END,
                 not_before = CASE WHEN gen_key LIKE 'off:compte:%' THEN $3 ELSE not_before END,
@@ -546,6 +552,10 @@ async fn cancel(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     sqlx::query("UPDATE departures SET status = 'annule', cancelled_at = now(), cancel_reason = $2, version = version + 1, updated_at = now() WHERE id = $1")
         .bind(d.id)
         .bind(&reason)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("UPDATE employees SET leaving = false, planned_exit_date = NULL, version = version + 1, updated_at = now() WHERE id = $1")
+        .bind(d.employee_id)
         .execute(&mut *tx)
         .await?;
     let n = sqlx::query("UPDATE tasks SET status = 'annule', version = version + 1, updated_at = now() WHERE case_id = $1 AND status IN ('a_faire', 'en_cours', 'bloque')")
@@ -989,7 +999,7 @@ pub async fn process_due(pool: &sqlx::PgPool, today: NaiveDate, grace_minutes: i
             .await?
             .rows_affected();
         if claimed == 1 {
-            sqlx::query("UPDATE employees SET status = 'sorti', exit_date = $2, version = version + 1, updated_at = now() WHERE id = $1")
+            sqlx::query("UPDATE employees SET status = 'sorti', exit_date = $2, leaving = false, version = version + 1, updated_at = now() WHERE id = $1")
                 .bind(employee_id)
                 .bind(last_day)
                 .execute(&mut *tx)

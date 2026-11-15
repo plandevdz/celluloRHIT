@@ -684,12 +684,31 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
                     'id', n.id, 'category', n.category, 'answer', n.answer, 'quantity', n.quantity,
                     'preference', n.preference, 'detail', n.detail, 'revision', n.revision, 'updated_at', n.updated_at,
                     'origin', n.origin,
+                    'delivered', (SELECT coalesce(sum(ml.quantity), 0) FROM movement_lines ml
+                                    JOIN movements m ON m.id = ml.movement_id LEFT JOIN assets a ON a.id = ml.asset_id
+                                   WHERE m.case_id = n.case_id AND m.kind = 'remise' AND (
+                                     (n.category = 'pc' AND a.kind IN ('pc_portable', 'pc_fixe'))
+                                     OR (n.category IN ('ecran', 'tablette', 'imprimante', 'telephone') AND a.kind = n.category)
+                                     OR (n.category = 'accessoire' AND ml.item_type = 'accessoire')
+                                     OR (n.category = 'sim' AND ml.item_type = 'sim'))),
+                    'delivered_items', (SELECT coalesce(jsonb_agg(ml.label || coalesce(' (' || ml.identifier || ')', '')
+                                          || CASE WHEN ml.quantity > 1 THEN ' × ' || ml.quantity ELSE '' END ORDER BY m.effective_at), '[]')
+                                    FROM movement_lines ml
+                                    JOIN movements m ON m.id = ml.movement_id LEFT JOIN assets a ON a.id = ml.asset_id
+                                   WHERE m.case_id = n.case_id AND m.kind = 'remise' AND (
+                                     (n.category = 'pc' AND a.kind IN ('pc_portable', 'pc_fixe'))
+                                     OR (n.category IN ('ecran', 'tablette', 'imprimante', 'telephone') AND a.kind = n.category)
+                                     OR (n.category = 'accessoire' AND ml.item_type = 'accessoire')
+                                     OR (n.category = 'sim' AND ml.item_type = 'sim'))),
+                    'delivered_kinds', (SELECT coalesce(jsonb_agg(DISTINCT a.kind), '[]') FROM movement_lines ml
+                                    JOIN movements m ON m.id = ml.movement_id JOIN assets a ON a.id = ml.asset_id
+                                   WHERE m.case_id = n.case_id AND m.kind = 'remise' AND n.category = 'pc' AND a.kind IN ('pc_portable', 'pc_fixe')),
                     'updated_by', u.display_name,
                     'history', (SELECT coalesce(jsonb_agg(jsonb_build_object('revision', r.revision, 'answer', r.answer,
                                       'preference', r.preference, 'quantity', r.quantity, 'detail', r.detail,
                                       'changed_at', r.changed_at) ORDER BY r.revision), '[]')
                                   FROM need_revisions r WHERE r.need_id = n.id))
-                    ORDER BY array_position(ARRAY['pc','telephone','sim','email_pro','xena','intelix','carte_visite','vehicule','formation'], n.category)), '[]')
+                    ORDER BY array_position(ARRAY['pc','ecran','tablette','imprimante','accessoire','telephone','sim','email_pro','xena','intelix','carte_visite','vehicule','formation'], n.category)), '[]')
            FROM case_needs n JOIN users u ON u.id = n.updated_by
           WHERE n.case_id = $1 AND n.category = ANY($2)",
     )

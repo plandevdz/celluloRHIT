@@ -189,6 +189,10 @@ async fn compare(conn: &mut PgConnection, employee_id: Uuid, cur: &Current, targ
         let category = match (item_type.as_str(), kind.as_deref()) {
             ("asset", Some("pc_portable" | "pc_fixe")) => Some(NeedCategory::Pc),
             ("asset", Some("telephone")) => Some(NeedCategory::Telephone),
+            ("asset", Some("ecran")) => Some(NeedCategory::Ecran),
+            ("asset", Some("tablette")) => Some(NeedCategory::Tablette),
+            ("asset", Some("imprimante")) => Some(NeedCategory::Imprimante),
+            ("accessoire", _) => Some(NeedCategory::Accessoire),
             ("sim", _) => Some(NeedCategory::Sim),
             _ => None,
         };

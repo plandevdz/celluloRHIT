@@ -342,5 +342,8 @@ async fn export_droits_et_contenu_reel(pool: PgPool) {
     let mut wb: Xlsx<_> = open_workbook_from_rs(Cursor::new(tpl)).unwrap();
     let r = wb.worksheet_range("Personnel").unwrap();
     let headers: Vec<String> = r.rows().next().unwrap().iter().map(|c| c.to_string()).collect();
-    assert_eq!(headers, HEADERS.iter().map(|h| h.to_string()).collect::<Vec<_>>());
+    // Les 8 colonnes historiques d'abord (compatibilité), puis les facultatives.
+    assert_eq!(headers[..8].to_vec(), HEADERS.iter().map(|h| h.to_string()).collect::<Vec<_>>());
+    assert_eq!(headers.len(), 14);
+    assert!(wb.sheet_names().iter().any(|n| n == "Mode d'emploi"));
 }
