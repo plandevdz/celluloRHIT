@@ -677,6 +677,7 @@ async fn vehicle_return(
         .bind(movement)
         .execute(&mut *tx)
         .await?;
+    crate::routes::departures::on_returned(&mut tx, &user, None, Some(assignment), &reference).await?;
     sqlx::query("UPDATE vehicles SET status = 'disponible', version = version + 1, updated_at = now() WHERE id = $1")
         .bind(id)
         .execute(&mut *tx)

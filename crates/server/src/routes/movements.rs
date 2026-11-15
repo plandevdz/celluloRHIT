@@ -531,6 +531,9 @@ async fn create_return(
         .bind(effective_at)
         .execute(&mut *tx)
         .await?;
+        if qty == open_qty {
+            crate::routes::departures::on_returned(&mut tx, &user, Some(assignment_id), None, &reference).await?;
+        }
         match item_type.as_str() {
             // Un poste rendu passe en contrôle avant d'être de nouveau disponible.
             "asset" => {

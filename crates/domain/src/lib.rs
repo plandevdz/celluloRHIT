@@ -12,6 +12,7 @@ pub mod needs;
 pub mod roles;
 pub mod tasks;
 pub mod text;
+pub mod transitions;
 pub mod vehicles;
 
 pub use cases::{CaseKind, CaseStatus};

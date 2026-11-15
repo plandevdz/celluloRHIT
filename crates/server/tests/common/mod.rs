@@ -51,6 +51,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
         max_upload_bytes: 2 * 1024 * 1024,
         alert_days: 30,
         alert_km: 1000,
+        escalation_minutes: 60,
     }
 }
 

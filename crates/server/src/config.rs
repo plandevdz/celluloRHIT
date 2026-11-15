@@ -41,6 +41,8 @@ pub struct Config {
     pub alert_days: i32,
     /// Seuil d'alerte kilométrique avant un entretien.
     pub alert_km: i32,
+    /// Délai après l'heure de coupure avant relance « accès à vérifier ».
+    pub escalation_minutes: i64,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -80,6 +82,7 @@ impl Config {
             max_upload_bytes: parse_or("MAX_UPLOAD_MB", 15)? as usize * 1024 * 1024,
             alert_days: parse_or("ALERT_DAYS", 30)? as i32,
             alert_km: parse_or("ALERT_KM", 1000)? as i32,
+            escalation_minutes: parse_or("ESCALATION_MINUTES", 60)?,
         })
     }
 }

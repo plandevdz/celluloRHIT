@@ -34,6 +34,9 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
     if let Err(e) = check_deadlines(state).await {
         tracing::error!(error = ?e, "contrôle des échéances en échec");
     }
+    if let Err(e) = process_transitions(state).await {
+        tracing::error!(error = ?e, "mutations ou départs à échéance en échec");
+    }
     expand_outbox(state).await?;
     deliver(state).await?;
     generate_documents(state).await?;
@@ -139,6 +142,15 @@ pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
             }
         }
     }
+    Ok(())
+}
+
+/// Mutations à appliquer et départs à échéance. Tout repose sur l'état en
+/// base : après un redémarrage, les échéances passées sont traitées.
+pub async fn process_transitions(state: &AppState) -> anyhow::Result<()> {
+    let today = documents::algiers_today();
+    crate::routes::transfers::apply_due(&state.pool, today).await?;
+    crate::routes::departures::process_due(&state.pool, today, state.config.escalation_minutes).await?;
     Ok(())
 }
 

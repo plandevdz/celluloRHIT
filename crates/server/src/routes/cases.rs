@@ -88,7 +88,7 @@ struct ArrivalInput {
 
 // ------------------------------------------------------------------ outils communs
 
-async fn next_reference(conn: &mut PgConnection, kind: CaseKind) -> AppResult<String> {
+pub async fn next_reference(conn: &mut PgConnection, kind: CaseKind) -> AppResult<String> {
     let n: i64 = sqlx::query_scalar(&format!("SELECT nextval('{}')", kind.sequence_name()))
         .fetch_one(conn)
         .await?;
@@ -792,10 +792,30 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     } else {
         json!([])
     };
+    // Mutation : comparaison et décisions pour le RH et l'ADMIN.
+    let transfer: Value = if hr && c.kind == "MUT" {
+        crate::routes::transfers::case_json(&mut conn, c.id).await?
+    } else {
+        Value::Null
+    };
+    // Départ : le motif privé reste au RH ; l'IT voit accès, licences et
+    // biens ; le véhicule relève du RH.
+    let departure: Value = if c.kind == "OFF" && (hr || it) {
+        let kinds: Vec<&str> = if hr {
+            vec!["compte", "licence", "bien", "vehicule", "donnees", "autre"]
+        } else {
+            vec!["compte", "licence", "bien", "donnees", "autre"]
+        };
+        crate::routes::departures::case_json(&mut conn, c.id, hr, &kinds, state.config.escalation_minutes).await?
+    } else {
+        Value::Null
+    };
     Ok(Json(json!({
         "scope": if hr { "complet" } else { "equipe" },
         "mail_mode": state.config.mail_mode.as_str(),
         "case": c,
+        "transfer": transfer,
+        "departure": departure,
         "needs": needs,
         "tasks": tasks,
         "trainings": trainings,
@@ -1053,11 +1073,11 @@ async fn close_case(
 ) -> AppResult<Json<Value>> {
     user.require(domain::roles::HR_MANAGERS)?;
     let mut tx = state.pool.begin().await?;
-    let row: Option<(String, i32)> = sqlx::query_as("SELECT status, version FROM cases WHERE id = $1 FOR UPDATE")
+    let row: Option<(String, i32, String)> = sqlx::query_as("SELECT status, version, kind FROM cases WHERE id = $1 FOR UPDATE")
         .bind(case_id)
         .fetch_optional(&mut *tx)
         .await?;
-    let (status, version) = row.ok_or_else(|| AppError::not_found("dossier"))?;
+    let (status, version, kind) = row.ok_or_else(|| AppError::not_found("dossier"))?;
     if status != "ouvert" {
         return Err(AppError::conflict("dossier déjà clos ou annulé"));
     }
@@ -1079,6 +1099,50 @@ async fn close_case(
     .await?;
     let mut unresolved: Vec<String> = open_tasks.into_iter().map(|t| format!("Tâche ouverte : {t}")).collect();
     unresolved.extend(unsigned);
+    // Mutation : la nouvelle situation doit être appliquée.
+    if kind == "MUT" {
+        let t: Option<String> = sqlx::query_scalar("SELECT status FROM transfers WHERE case_id = $1").bind(case_id).fetch_optional(&mut *tx).await?;
+        if t.as_deref() != Some("appliquee") {
+            return Err(AppError::Conflict {
+                message: "la nouvelle situation n'est pas encore appliquée".into(),
+                detail: Some(json!({ "unresolved": [format!("Mutation : {}", t.unwrap_or_default())] })),
+            });
+        }
+    }
+    // Départ : un accès encore actif non autorisé empêche toute clôture ;
+    // les autres points non soldés relèvent d'une exception motivée.
+    if kind == "OFF" {
+        let d: Option<(String, Uuid)> = sqlx::query_as("SELECT status, id FROM departures WHERE case_id = $1").bind(case_id).fetch_optional(&mut *tx).await?;
+        if let Some((dstatus, did)) = d {
+            if dstatus == "planifie" {
+                return Err(AppError::Conflict {
+                    message: "la sortie administrative n'est pas encore effective".into(),
+                    detail: Some(json!({ "unresolved": ["Sortie administrative à venir"] })),
+                });
+            }
+            let access: Vec<String> = sqlx::query_scalar(
+                "SELECT 'Accès non confirmé coupé : ' || label FROM exit_controls WHERE departure_id = $1 AND kind = 'compte' AND state IN ('a_traiter', 'ecart') ORDER BY label",
+            )
+            .bind(did)
+            .fetch_all(&mut *tx)
+            .await?;
+            if !access.is_empty() {
+                return Err(AppError::Conflict { message: "des accès ne sont pas confirmés coupés".into(), detail: Some(json!({ "unresolved": access })) });
+            }
+            let others: Vec<String> = sqlx::query_scalar(
+                "SELECT CASE state WHEN 'ecart' THEN 'Écart non arbitré : ' ELSE 'Non soldé : ' END || label
+                   FROM exit_controls WHERE departure_id = $1 AND state IN ('a_traiter', 'ecart') ORDER BY label",
+            )
+            .bind(did)
+            .fetch_all(&mut *tx)
+            .await?;
+            for o in others {
+                if !unresolved.contains(&o) {
+                    unresolved.push(o);
+                }
+            }
+        }
+    }
     let exception = input.exception_reason.as_deref().and_then(domain::text::clean);
     if !unresolved.is_empty() {
         match &exception {

@@ -2,6 +2,7 @@ pub mod admin;
 pub mod assets;
 pub mod auth;
 pub mod cases;
+pub mod departures;
 pub mod employees;
 pub mod imports;
 pub mod inventory;
@@ -11,6 +12,7 @@ pub mod reprise;
 pub mod software;
 pub mod tasks;
 pub mod trainings;
+pub mod transfers;
 pub mod vehicles;
 
 use axum::extract::{Request, State};
@@ -75,6 +77,8 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .merge(referentials::routes())
         .merge(software::routes())
         .merge(inventory::routes())
+        .merge(transfers::routes())
+        .merge(departures::routes())
         .fallback(not_found)
         .layer(middleware::from_fn(require_client_header))
 }

@@ -58,6 +58,11 @@ struct TaskRow {
     need_preference: Option<String>,
     training_session_id: Option<Uuid>,
     resolution: Option<String>,
+    not_before: Option<DateTime<Utc>>,
+    due_at: Option<DateTime<Utc>>,
+    escalated_at: Option<DateTime<Utc>>,
+    exit_control_id: Option<Uuid>,
+    transfer_delta_id: Option<Uuid>,
 }
 
 /// « Mon travail » : files cumulées de toutes mes habilitations, sans
@@ -83,7 +88,8 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
                 t.blocked_reason, t.claimed_at, t.completed_at, t.version,
                 c.id AS case_id, c.reference AS case_reference, c.kind AS case_kind,
                 e.id AS employee_id, e.first_name || ' ' || e.last_name AS employee_name, s.name AS site_name,
-                n.category AS need_category, n.preference AS need_preference, t.training_session_id, t.resolution
+                n.category AS need_category, n.preference AS need_preference, t.training_session_id, t.resolution,
+                t.not_before, t.due_at, t.escalated_at, t.exit_control_id, t.transfer_delta_id
            FROM tasks t
            JOIN cases c ON c.id = t.case_id
            JOIN employees e ON e.id = c.employee_id
@@ -153,20 +159,23 @@ struct Locked {
     need_quantity: Option<i32>,
     training_session_id: Option<Uuid>,
     employee_id: Uuid,
+    exit_control_id: Option<Uuid>,
+    transfer_delta_id: Option<Uuid>,
 }
 
-type LockedRow = (Uuid, String, String, Option<Uuid>, Option<String>, Option<i32>, Option<Uuid>, Uuid);
+type LockedRow = (Uuid, String, String, Option<Uuid>, Option<String>, Option<i32>, Option<Uuid>, Uuid, Option<Uuid>, Option<Uuid>);
 
 async fn lock_task(conn: &mut sqlx::PgConnection, id: Uuid) -> AppResult<Locked> {
     let row: Option<LockedRow> = sqlx::query_as(
-        "SELECT t.case_id, t.role, t.status, t.owner_id, n.category, n.quantity, t.training_session_id, c.employee_id
+        "SELECT t.case_id, t.role, t.status, t.owner_id, n.category, n.quantity, t.training_session_id, c.employee_id,
+                t.exit_control_id, t.transfer_delta_id
            FROM tasks t JOIN cases c ON c.id = t.case_id LEFT JOIN case_needs n ON n.id = t.need_id
           WHERE t.id = $1 FOR UPDATE OF t",
     )
     .bind(id)
     .fetch_optional(conn)
     .await?;
-    let (case_id, role, status, owner_id, need_category, need_quantity, training_session_id, employee_id) =
+    let (case_id, role, status, owner_id, need_category, need_quantity, training_session_id, employee_id, exit_control_id, transfer_delta_id) =
         row.ok_or_else(|| AppError::not_found("tâche"))?;
     Ok(Locked {
         case_id,
@@ -177,6 +186,8 @@ async fn lock_task(conn: &mut sqlx::PgConnection, id: Uuid) -> AppResult<Locked>
         need_quantity,
         training_session_id,
         employee_id,
+        exit_control_id,
+        transfer_delta_id,
     })
 }
 
@@ -291,6 +302,12 @@ async fn complete(
     if t.training_session_id.is_some() {
         return Err(AppError::invalid("task", "une formation se termine depuis sa session (réalisée ou dispensée)"));
     }
+    if t.exit_control_id.is_some() {
+        return Err(AppError::invalid(
+            "task",
+            "tâche de départ : confirmez depuis le dossier (accès coupé, siège libéré, bien rendu) ou signalez un écart",
+        ));
+    }
     let category = t.need_category.as_deref().and_then(NeedCategory::parse);
     let (resolution, evidence) = resolve(&mut tx, &t, category, &input, note.as_deref()).await?;
 
@@ -331,6 +348,41 @@ async fn resolve(
     input: &CompleteInput,
     note: Option<&str>,
 ) -> AppResult<(TaskResolution, Value)> {
+    // Mutation : reprendre (preuve du retour ou de la coupure) ou vérifier
+    // (état réel confirmé par l'opérateur).
+    if let (Some(delta), None) = (t.transfer_delta_id, category) {
+        if input.resolution == Some(TaskResolution::Exception) {
+            let motif = note.ok_or_else(|| AppError::invalid("note", "le motif de l'exception est obligatoire"))?;
+            return Ok((TaskResolution::Exception, json!({ "motif": motif })));
+        }
+        let (kind, object_ref, decision): (String, Option<Uuid>, String) =
+            sqlx::query_as("SELECT object_kind, object_ref, decision FROM transfer_deltas WHERE id = $1")
+                .bind(delta)
+                .fetch_one(&mut *conn)
+                .await?;
+        if decision == "verifier" {
+            let constat = note.ok_or_else(|| AppError::invalid("note", "indiquez l'état réel constaté (conservé, à reprendre…)"))?;
+            return Ok((TaskResolution::Realise, json!({ "verification": constat })));
+        }
+        let done: bool = match kind.as_str() {
+            "bien" => sqlx::query_scalar("SELECT ended_at IS NOT NULL FROM assignments WHERE id = $1").bind(object_ref).fetch_one(&mut *conn).await?,
+            "vehicule" => sqlx::query_scalar("SELECT ended_at IS NOT NULL FROM vehicle_assignments WHERE id = $1").bind(object_ref).fetch_one(&mut *conn).await?,
+            "compte" => sqlx::query_scalar("SELECT status = 'coupe' FROM employee_accounts WHERE id = $1").bind(object_ref).fetch_one(&mut *conn).await?,
+            "licence" => sqlx::query_scalar("SELECT ended_at IS NOT NULL FROM license_allocations WHERE id = $1").bind(object_ref).fetch_one(&mut *conn).await?,
+            _ => false,
+        };
+        if !done {
+            return Err(AppError::invalid(
+                "resolution",
+                match kind.as_str() {
+                    "bien" | "vehicule" => "enregistrez d'abord la restitution, ou choisissez « Exception motivée »",
+                    "compte" => "consignez d'abord la coupure du compte, ou choisissez « Exception motivée »",
+                    _ => "libérez d'abord le siège, ou choisissez « Exception motivée »",
+                },
+            ));
+        }
+        return Ok((TaskResolution::Realise, json!({ "repris": kind, "objet": object_ref })));
+    }
     let evidence_kind = category.map(|c| c.evidence()).unwrap_or(Evidence::None);
     let wanted = input.resolution.unwrap_or(match evidence_kind {
         Evidence::Equipment | Evidence::Vehicle => TaskResolution::Remis,
