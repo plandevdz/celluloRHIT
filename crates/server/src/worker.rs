@@ -40,6 +40,9 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
     expand_outbox(state).await?;
     deliver(state).await?;
     generate_documents(state).await?;
+    if let Err(e) = archive_documents(state).await {
+        tracing::error!(error = ?e, "archivage en échec");
+    }
     Ok(())
 }
 
@@ -126,8 +129,9 @@ pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
     )
     .fetch_all(&state.pool)
     .await?;
-    for (id, _sent_to) in due {
+    for (id, sent_to) in due {
         match state.config.mail_mode {
+            MailMode::Graph => deliver_graph(state, id, &sent_to).await?,
             MailMode::Journal => {
                 sqlx::query(
                     "UPDATE deliveries SET status = 'journalise', attempts = attempts + 1, last_attempt_at = now(),
@@ -139,6 +143,145 @@ pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
                 .await?;
                 // Pas de contenu RH dans les journaux : identifiant seulement.
                 tracing::info!(delivery = %id, "avis journalisé");
+            }
+        }
+    }
+    Ok(())
+}
+
+const MAX_SEND_ATTEMPTS: i32 = 10;
+
+/// Envoi réel par Microsoft Graph. 202 = accepté par Microsoft (pas une
+/// preuve de livraison) ; panne transitoire ou limitation = nouvel essai
+/// (Retry-After respecté, sinon délai croissant) ; refus de droits ou de
+/// destinataire = échec visible en Administration ; délai dépassé après
+/// soumission = « à vérifier », jamais réexpédié automatiquement.
+async fn deliver_graph(state: &AppState, id: Uuid, sent_to: &str) -> anyhow::Result<()> {
+    let row: Option<(String, String, Option<String>, i32)> = sqlx::query_as(
+        "SELECT o.subject, o.body, o.link_path, d.attempts FROM deliveries d JOIN outbox o ON o.id = d.outbox_id WHERE d.id = $1",
+    )
+    .bind(id)
+    .fetch_optional(&state.pool)
+    .await?;
+    let Some((subject, body, link, attempts)) = row else { return Ok(()) };
+    let finish = |status: &'static str, result: String, next: Option<chrono::DateTime<chrono::Utc>>| {
+        let pool = state.pool.clone();
+        async move {
+            sqlx::query(
+                "UPDATE deliveries SET status = $2, attempts = attempts + 1, last_attempt_at = now(), last_result = $3,
+                        next_attempt_at = coalesce($4, next_attempt_at), lease_until = NULL
+                  WHERE id = $1",
+            )
+            .bind(id)
+            .bind(status)
+            .bind(result)
+            .bind(next)
+            .execute(&pool)
+            .await
+        }
+    };
+    if !state.config.recipient_allowed(sent_to) {
+        finish("echec", "destinataire hors du périmètre pilote autorisé : aucun envoi".into(), None).await?;
+        return Ok(());
+    }
+    let (Some(client), Some(sender)) = (state.mailer.as_ref(), state.config.mail_sender.as_deref()) else {
+        finish("echec", "mode graph sans identité d'envoi configurée".into(), None).await?;
+        return Ok(());
+    };
+    let mut text = body;
+    if let Some(l) = link {
+        text.push_str(&format!("\nOuvrir dans l'application : {}{}\n", state.config.public_url.trim_end_matches('/'), l));
+    }
+    text.push_str("\n— Message automatique de l'application Celluloplast | Parcours salarié. Ne pas répondre.\n");
+    match client.send_mail(sender, sent_to, &subject, &text).await {
+        crate::graph::SendOutcome::Accepted => {
+            finish("accepte", "accepté par Exchange (202) — pas une preuve de livraison".into(), None).await?;
+            tracing::info!(delivery = %id, "avis accepté par Exchange");
+        }
+        crate::graph::SendOutcome::Retry { after, reason } => {
+            if attempts + 1 >= MAX_SEND_ATTEMPTS {
+                finish("echec", format!("{reason} — abandon après {} essais", attempts + 1), None).await?;
+            } else {
+                let backoff = Duration::from_secs((60u64 << attempts.clamp(0, 6) as u32).min(3600));
+                let wait = after.unwrap_or(backoff).max(Duration::from_secs(5));
+                let next = chrono::Utc::now() + chrono::Duration::from_std(wait).unwrap_or_else(|_| chrono::Duration::minutes(5));
+                finish("en_attente", format!("{reason} — nouvel essai prévu"), Some(next)).await?;
+            }
+            tracing::warn!(delivery = %id, "envoi différé");
+        }
+        crate::graph::SendOutcome::Failed(reason) => {
+            finish("echec", reason, None).await?;
+            tracing::error!(delivery = %id, "envoi refusé par Exchange");
+        }
+        crate::graph::SendOutcome::Unknown(reason) => {
+            finish("a_verifier", reason, None).await?;
+            tracing::warn!(delivery = %id, "résultat d'envoi inconnu");
+        }
+    }
+    Ok(())
+}
+
+const MAX_ARCHIVE_ATTEMPTS: i32 = 20;
+
+/// Archivage SharePoint des originaux et des scans, repris après une panne
+/// ou un redémarrage. La copie locale reste en place ; l'état « archivé »
+/// n'est posé qu'après vérification de l'identifiant et de la taille.
+pub async fn archive_documents(state: &AppState) -> anyhow::Result<()> {
+    let (Some(client), Some(target)) = (state.archiver.as_ref(), state.config.archive_target.as_ref()) else { return Ok(()) };
+    let due: Vec<(Uuid, String, i64, i32)> = sqlx::query_as(
+        "WITH picked AS (
+            SELECT id FROM document_versions
+             WHERE archive_status = 'en_attente' AND (archive_next_at IS NULL OR archive_next_at <= now())
+             ORDER BY created_at LIMIT 5 FOR UPDATE SKIP LOCKED)
+         UPDATE document_versions v SET archive_next_at = now() + interval '10 minutes'
+           FROM picked WHERE v.id = picked.id
+         RETURNING v.id, v.storage_path, v.size_bytes, v.archive_attempts",
+    )
+    .fetch_all(&state.pool)
+    .await?;
+    for (id, path, size, attempts) in due {
+        let bytes = match tokio::fs::read(state.config.data_dir.join(&path)).await {
+            Ok(b) => b,
+            Err(e) => {
+                sqlx::query("UPDATE document_versions SET archive_status = 'echec', archive_error = $2 WHERE id = $1")
+                    .bind(id)
+                    .bind(format!("copie locale illisible : {e}"))
+                    .execute(&state.pool)
+                    .await?;
+                continue;
+            }
+        };
+        let remote = format!("{}/{}", target.root.trim_matches('/'), path);
+        match client.upload(&target.site_id, &target.drive_id, &remote, &bytes).await {
+            Ok((item, remote_size)) if remote_size == size as u64 || remote_size == 0 && size == 0 => {
+                sqlx::query(
+                    "UPDATE document_versions SET archive_status = 'archive', archive_id = $2, archived_at = now(), archive_error = NULL,
+                            archive_attempts = archive_attempts + 1, archive_next_at = NULL WHERE id = $1",
+                )
+                .bind(id)
+                .bind(item)
+                .execute(&state.pool)
+                .await?;
+                tracing::info!(version = %id, "document archivé");
+            }
+            other => {
+                let reason = match other {
+                    Ok((_, s)) => format!("taille distante incohérente ({s} octets au lieu de {size})"),
+                    Err(e) => e,
+                };
+                let failed = attempts + 1 >= MAX_ARCHIVE_ATTEMPTS;
+                let wait = chrono::Duration::minutes((5i64 << attempts.clamp(0, 6)).min(720));
+                sqlx::query(
+                    "UPDATE document_versions SET archive_status = CASE WHEN $3 THEN 'echec' ELSE 'en_attente' END, archive_error = $2,
+                            archive_attempts = archive_attempts + 1, archive_next_at = now() + $4 WHERE id = $1",
+                )
+                .bind(id)
+                .bind(&reason)
+                .bind(failed)
+                .bind(wait)
+                .execute(&state.pool)
+                .await?;
+                tracing::warn!(version = %id, "archivage différé");
             }
         }
     }

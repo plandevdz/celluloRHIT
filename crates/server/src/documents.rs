@@ -149,12 +149,13 @@ pub async fn ensure_original(pool: &PgPool, config: &Config, document_id: Uuid) 
     write_file(&config.data_dir, &relative, &bytes).await?;
     sqlx::query(
         "INSERT INTO document_versions (document_id, version, file_kind, storage_path, sha256, size_bytes, mime_type, archive_status)
-         VALUES ($1, 1, 'original', $2, $3, $4, 'application/pdf', 'desactive')",
+         VALUES ($1, 1, 'original', $2, $3, $4, 'application/pdf', $5)",
     )
     .bind(document_id)
     .bind(relative.to_string_lossy().replace('\\', "/"))
     .bind(sha256_hex(&bytes))
     .bind(bytes.len() as i64)
+    .bind(config.archive_mode.initial_status())
     .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE documents SET status = 'genere', updated_at = now() WHERE id = $1 AND status = 'a_generer'")

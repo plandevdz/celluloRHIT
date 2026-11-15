@@ -24,6 +24,9 @@ hex = "0.4"
 printpdf = "0.7"
 qrcode = { version = "0.14", default-features = false }
 rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+rsa = { version = "0.9", features = ["sha2", "pem"] }
+sha1 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"

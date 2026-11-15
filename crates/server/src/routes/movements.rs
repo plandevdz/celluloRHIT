@@ -726,7 +726,7 @@ async fn upload_scan(
     let sha = documents::sha256_hex(&bytes);
     sqlx::query(
         "INSERT INTO document_versions (document_id, version, file_kind, storage_path, sha256, size_bytes, mime_type, archive_status, created_by)
-         VALUES ($1, $2, 'scan', $3, $4, $5, $6, 'desactive', $7)",
+         VALUES ($1, $2, 'scan', $3, $4, $5, $6, $8, $7)",
     )
     .bind(id)
     .bind(version)
@@ -735,6 +735,7 @@ async fn upload_scan(
     .bind(bytes.len() as i64)
     .bind(mime)
     .bind(user.id)
+    .bind(state.config.archive_mode.initial_status())
     .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE documents SET status = 'signe', updated_at = now() WHERE id = $1")

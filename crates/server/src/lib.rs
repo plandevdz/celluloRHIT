@@ -5,6 +5,7 @@ pub mod auth;
 pub mod config;
 pub mod documents;
 pub mod error;
+pub mod graph;
 pub mod idempotency;
 pub mod labels;
 pub mod pdf;

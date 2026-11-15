@@ -46,7 +46,7 @@ async fn main() -> anyhow::Result<()> {
         Command::Serve => {
             MIGRATOR.run(&pool).await?;
             let bind = config.bind_addr.clone();
-            let state = AppState::new(pool, config);
+            let state = AppState::try_new(pool, config)?;
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(%bind, version = server::VERSION, "API démarrée");
             axum::serve(listener, app(state))
@@ -57,7 +57,7 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Worker => {
             MIGRATOR.run(&pool).await?;
-            worker::run(AppState::new(pool, config)).await?;
+            worker::run(AppState::try_new(pool, config)?).await?;
         }
         Command::Migrate => {
             MIGRATOR.run(&pool).await?;
