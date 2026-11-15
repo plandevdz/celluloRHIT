@@ -1,0 +1,2 @@
+# Scripts shell : toujours LF, sinon Linux echoue sur « bash<CR> » ou « pipefail<CR> ».
+*.sh text eol=lf
