@@ -109,11 +109,19 @@ elif [ "$CRYPTO" = 1 ]; then
   echo "Configuration et autorité de certification interne (chiffrées)…"
   # Sans cette CA, une restauration crée une nouvelle autorité : tous les PC
   # Windows devraient réinstaller le certificat racine.
+  # Certificats et clés Microsoft Graph (./secrets), s'ils sont installés.
+  SECRET_MOUNT=()
+  SECRET_PATHS=()
+  if [ -d "$PWD/secrets" ]; then
+    SECRET_MOUNT=(-v "$PWD/secrets:/cfg/secrets:ro")
+    SECRET_PATHS=(cfg/secrets)
+  fi
   run_to "$DEST/secrets-$STAMP.tar.gz.gpg" chiffre \
     docker run --rm \
       -v "${PROJECT}_caddy_data:/caddy:ro" \
       -v "$PWD/.env:/cfg/.env:ro" \
-      debian:trixie-slim tar czf - -C / cfg/.env caddy/caddy/pki
+      "${SECRET_MOUNT[@]}" \
+      debian:trixie-slim tar czf - -C / cfg/.env caddy/caddy/pki "${SECRET_PATHS[@]}"
 else
   STATUS="incomplete"
 fi

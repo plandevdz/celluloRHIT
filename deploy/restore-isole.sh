@@ -78,7 +78,9 @@ fi
 
 # Configuration propre à la recette : adresse de la VM, mot de passe
 # PostgreSQL neuf (celui de la production n'est pas réutilisé), aucun
-# destinataire de test ; MAIL_MODE=journal est imposé par docker-compose.yml.
+# destinataire de test ; aucun envoi Exchange ni archivage SharePoint
+# (MAIL_MODE=journal et ARCHIVE_MODE=desactive imposés, y compris contre une
+# variable exportée dans le shell, prioritaire sur --env-file).
 # Conservé hors de l'espace de travail : toutes les commandes manuelles
 # ultérieures l'utilisent (docker compose -p cellulo-restore --env-file …).
 ENVF="${RESTORE_ENV_FILE:-/root/cellulo-restore.env}"
@@ -89,7 +91,10 @@ ENVF="${RESTORE_ENV_FILE:-/root/cellulo-restore.env}"
   echo "PUBLIC_URL=https://$ADDR"
   echo "POSTGRES_PASSWORD=$(openssl rand -hex 24)"
   echo "MAIL_TEST_RECIPIENT="
+  echo "MAIL_MODE=journal"
+  echo "ARCHIVE_MODE=desactive"
 } > "$ENVF" )
+export MAIL_MODE=journal ARCHIVE_MODE=desactive
 echo "   environnement de recette : $ENVF"
 DC=(docker compose -p "$PROJECT" --env-file "$ENVF")
 
