@@ -72,18 +72,20 @@ Par rapport à la v1 : cinq rôles cumulables, cinq champs pour annoncer une arr
 4. Mutation, démission et traitements à échéance ; valider les dates, les conflits de poste et la séparation sortie/coupure/retour.
 5. Piloter sur un site avec données fictives, tester imprimante et douchette réelles ; reprise SharePoint à blanc, rapprochement, sauvegarde restaurée et bascule maîtrisée.
 
-### Avancement (12/11/2026)
+### Avancement (15/11/2026)
 | Étape | Implémenté | Testé automatiquement | Vérifié dans le navigateur | À valider sur site |
 |---|---|---|---|---|
 | 1. Socle (rôles, références, HTTPS, Docker, sauvegarde) | oui | oui | oui | restauration Docker complète, CA conservée |
 | 2. Tranche verticale arrivée → remise (R01–R06) | oui | oui | oui | impression papier, douchette, e-mails réels |
 | Lot 1 : périmètre des données, présence réelle, preuves de fin de tâche, avis exacts | oui | oui | oui | — |
 | 3. Excel du personnel (R08) | oui | oui | oui | classeur RH réel |
-| 3. QR et inventaire (R07), licences, véhicules (R11, R12), reprise Exchange/SharePoint (R13) | non | — | — | — |
-| 4. Mutation, démission (R09, R10) | non | — | — | — |
+| 3. QR et inventaire (R07), licences et véhicules (R11, R12), référentiels, états des lieux | oui | oui | oui (inventaire, logiciels, véhicules) | impression des étiquettes, douchette |
+| 3. Envoi Exchange (Graph) et archivage SharePoint (R13) | oui (désactivés par défaut) | oui, contre un faux serveur Graph | — | raccordement réel : boîte et applications Entra à créer |
+| 4. Mutation, démission, traitements à échéance (R09, R10) | oui | oui | oui (départ) | — |
+| 5. Reprise des listes SharePoint (T08) | oui | oui | oui (aperçu, décisions) | reprise à blanc avec les vrais exports |
 | 5. Pilote | non | — | — | — |
 
-Le détail par scénario est dans 05-Recette.md. Prochaine tranche prévue : envoi Exchange vers une boîte de test avec reprise sur erreur, puis étiquettes QR et campagnes d’inventaire.
+Le détail par scénario est dans 05-Recette.md. Étape suivante : pilote sur un site (reprise SharePoint à blanc, raccordement Exchange vers une boîte de test, impression et douchette réelles, restauration sur VM).
 
 Pour chaque tranche : livrer code, migrations, tests d’intégration, données fictives, démonstration dans un navigateur sur poste Windows et écarts restants. Ne pas activer les anciens flux ni envoyer de vrais mails pendant les tests. Ne pas intégrer de secrets dans le projet. Avant production seulement : confirmer matériel, IP/DNS, expéditeur Exchange, bibliothèque documentaire, cibles de sauvegarde et destinataires d’escalade.
 

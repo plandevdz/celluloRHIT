@@ -28,24 +28,28 @@ Préparer un utilisateur par rôle et un IT + FORMATION ; deux sites et deux loc
 | L4 | Arrivée avec carte de visite sans aucun GRAPHISTE actif, en mode journal. | « Dossier visible par … — aucun e-mail envoyé (mode test) » ; équipe sans destinataire signalée en Administration ; arrivée créée ; « consigné » jamais compté comme « envoyé ». |
 | RP | Sur une **VM de test distincte de la production** : `backup.sh`, puis `restore-isole.sh` (projet `cellulo-restore`, volumes neufs). | Dossier, rôles (dont IT + FORMATION), empreintes du PDF et du scan identiques ; empreinte du certificat racine Caddy identique avant/après ; mode d'envoi « journal ». Refus sur cible non vide ou de production ; arrêt avant démarrage en cas d'échec. |
 
-## État au 12/11/2026 (branche `lot1-fiabilisation-lot2-excel`)
+## État au 15/11/2026 (branche `lot3-complet`)
 
 Légende : **auto** = test automatisé exécuté et réussi (PostgreSQL 17 réel) ; **nav** = vérifié dans un navigateur sur une instance isolée avec données fictives ; **site** = reste à valider sur site.
 
 | ID | Implémenté | Testé auto | Vérifié nav | À valider sur site |
 |---|---|---|---|---|
-| R01 | oui | oui (`parcours::r01`, `lot1::avis_honnetes`) | oui | envoi Exchange réel (non livré) |
+| R01 | oui | oui (`parcours::r01`, `lot1::avis_honnetes`) | oui | envoi Exchange réel vers une boîte de test |
 | R02 | oui | oui (`parcours::r02_r06`, `lot1::preuve_de_remise`) | oui : remise portable + SIM, motif, contenu du PDF relu | impression A4 papier, douchette réelle |
 | R03 | oui | oui (`parcours::r03`) | partiel : session réalisée avant le PC ; la prise simultanée n'est testée qu'automatiquement | — |
 | R04 | oui | oui (`parcours::r04`) | non | — |
 | R05 | oui | oui (`parcours::r05`) | oui : DEM après clôture, vue Graphiste | — |
 | R06 | oui | oui (`parcours::r02_r06`) | oui (session du 12/11 matin) | signature et scan réels |
-| R07 | **non** (prochaine tranche) | — | — | — |
+| R07 | oui | oui (`inventaire::r07_campagne_inventaire`) | oui : doublon « Déjà pointé dans ce local », compteurs | lecture d'une planche imprimée à la douchette |
 | R08 | oui | oui (`lot2_excel`, 2 tests) | oui : aperçu, décisions, application, export | classeur RH réel, ouverture dans Excel et LibreOffice |
-| R09 à R12 | **non** | — | — | — |
-| R13 | partiel : mode journal seul ; Exchange et SharePoint non raccordés | — | — | — |
+| R09 | oui | oui (`mutation_depart::r09_…`, `mutation_annulee_avant_effet`) | non | — |
+| R10 | oui | oui (`mutation_depart::r10_…` : redémarrage simulé, coupure non réputée faite, sortie effective, dossier ouvert) | oui : panneau Départ après passage du worker | — |
+| R11 | oui | oui (`vehicules::r11_…`) | oui : remise depuis la tâche RH, tâche soldée « Remis » | — |
+| R12 | oui | oui (`logiciels::r12_…` en parallèle, `siege_libere_en_fin_de_periode`, `vehicules::r12_…`) | partiel : liste des logiciels | — |
+| R13 | oui : adaptateurs Graph (envoi, archive), reprise après panne, résultat inconnu « à vérifier » | oui (`graph::r13_…`, faux serveur Graph local, signature JWT vérifiée) | — | coupure réelle Exchange/SharePoint pendant une remise |
+| T08 | reprise des listes SharePoint | oui (`reprise`, 3 tests) | oui : aperçu MaterielIT, rejet, décision | reprise à blanc avec les exports réels |
 | R14 | refus API : oui ; restauration : voir RP | oui (`parcours::r14`, `lot1::graphiste_autorise…`, `lot2_excel::export_droits…`) | oui : 403 en appel direct depuis le navigateur | restauration Docker complète |
 | L1 à L4 | oui | oui (`lot1`, 4 tests) | oui (L1 : Formation et Graphiste ; L2 à L4) | — |
 | RP | `backup.sh` chiffré (GPG à clé publique, code 3 si non configuré) ; `restore-isole.sh` (VM de test, garde-fous, arrêt avant démarrage) | `test-backup.sh` (21 contrôles) et `test-restore.sh` (22 contrôles) avec faux docker : **oui** ; restauration PostgreSQL + documents : **exécutée et réussie** hors Docker | — | **recette complète sur VM avec vrai Docker : NON EXÉCUTÉE** (sauvegarde → restauration → dossier, rôles, empreintes PDF/scan, certificat racine Caddy avant/après) |
 
-Non validé à ce jour : le rendu des noms arabes dans les PDF (les glyphes sont présents, mais la liaison et le sens de lecture ne sont pas traités) et l'impression papier. La présence d'un en-tête PDF ne vaut pas validation.
+Non validé à ce jour : l'impression des étiquettes QR (rendu PDF non relu à l'écran sur le poste de développement), le rendu des noms arabes dans les PDF (les glyphes sont présents, mais la liaison et le sens de lecture ne sont pas traités) et l'impression papier. La présence d'un en-tête PDF ne vaut pas validation.

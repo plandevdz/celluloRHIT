@@ -215,32 +215,65 @@ Cette commande crée deux sites, un compte par rôle (dont un IT + FORMATION), d
 ## État de cette version
 
 **Livré** :
-- comptes et rôles ;
-- annonce d'arrivée, besoins et révisions ;
-- file « Mon travail » avec prise atomique ;
-- formations ;
-- comptes IT et indicateur M365 ;
-- parc IT (actifs, accessoires, SIM) ;
-- remises et restitutions partielles avec décharge PDF et scan signé ;
-- demandes ponctuelles et clôture contrôlée ;
-- avis en **mode journal** (aucun e-mail envoyé).
+- comptes et rôles ; annonce d'arrivée, besoins et révisions ; file « Mon travail » avec prise atomique ;
+- formations (catalogue détaillé, évaluation) ; comptes IT et indicateur M365 ;
+- parc IT : actifs (marque, modèle, Intune, garantie, état, matériel partagé « en service »), accessoires, SIM et lignes (forfait, type) ;
+- remises et restitutions partielles avec décharge PDF et scan signé ; demandes ponctuelles et clôture contrôlée ;
+- lot 1 (données filtrées par équipe, « Confirmer l'arrivée », fin de tâche avec preuve, avis honnêtes, sauvegarde) et lot 2 (Excel du personnel) ;
+- **référentiels** : profils de poste (besoins et formations suggérés à l'annonce), wilayas, contrat, poste fixe, manager relié ;
+- **logiciels** : abonnements ou licences perpétuelles, sièges attribués sous verrou, libération selon le contrat, alerte de renouvellement à l'IT ;
+- **véhicules RH** : propriété ou location, contrats renouvelés sans effacement, pièces (assurance, contrôle technique…), entretien par date ou kilométrage, remise, restitution et retour au loueur distincts, alertes d'échéance au RH ;
+- **étiquettes QR** (planche A4 ou unitaire) et **campagnes d'inventaire** (poste de scan, écarts, arbitrages, rapport Excel) ;
+- **mutation (M05)** : comparaison « Actuel / Cible / Action », application unique à la date d'effet, suspension si le poste a changé, report, annulation, correction datée ;
+- **départ (M06)** : dernier jour et instant de coupure séparés, accès et biens à traiter, coupure confirmée par l'IT, relance « accès à vérifier », sortie administrative sans attendre les restitutions, écart, perte motivée ;
+- **avis par Exchange Online** (Microsoft Graph, `MAIL_MODE=graph`) et **archivage SharePoint** (`ARCHIVE_MODE=sharepoint`) — désactivés par défaut ;
+- **reprise des listes SharePoint** (Administration → Reprise SharePoint) ;
+- **états des lieux** (menu « États ») exportables en Excel.
 
-**Lot 1** (fiabilisation de l'arrivée) :
-- données filtrées par équipe dans l'API ;
-- « Confirmer l'arrivée » ;
-- fin de tâche avec preuve (remis / déjà détenu / exception motivée) ;
-- avis affichés honnêtement ;
-- sauvegarde de la configuration et de la CA.
+**À valider sur site** : impression des étiquettes et lecture à la douchette, impression A4 des décharges, rendu des noms arabes dans les PDF, raccordement réel d'Exchange et de SharePoint (comptes Microsoft à créer par l'administrateur), recette de restauration sur une VM.
 
-**Lot 2** : import et export Excel du personnel.
+## Passer à la version « lot 3 » (migrations 0003 à 0008)
 
-**Pas encore livré** :
-- envoi réel par Exchange Online (Graph) ;
-- archivage SharePoint ;
-- étiquettes QR et campagnes d'inventaire ;
-- véhicules ;
-- licences logicielles ;
-- mutation (M05) et démission (M06).
+Les migrations `0003` à `0008` sont **additives** : nouvelles tables (wilayas, profils, véhicules, logiciels, inventaires, mutations, départs, reprise) et nouvelles colonnes facultatives. Elles élargissent deux contraintes (types et états d'actif, nature de mouvement) sans changer de valeur existante. Aucune donnée n'est réinterprétée ; aucun e-mail n'est envoyé tant que `MAIL_MODE` reste à `journal`.
+
+```bash
+cd /opt/celluloplast
+sudo deploy/backup.sh /var/backups/celluloplast          # sauvegarde AVANT (obligatoire)
+sudo git fetch && sudo git checkout <version validée>
+sudo docker compose up -d --build                        # migrations 0003 à 0008 au démarrage d'app
+sudo docker compose logs app | grep -i -E "migr|démarrée|error"
+```
+
+Le `.env` existant reste valable : les nouvelles variables ont des valeurs par défaut (voir `.env.example`). Retour arrière : comme pour la 0002, restaurer la sauvegarde prise juste avant.
+
+## Raccorder Exchange Online (envoi des avis)
+
+À faire avec l'administrateur Microsoft 365, d'abord vers une **boîte de test** :
+
+1. Créer la boîte d'expédition dédiée (ex. `avis-parcours@…`).
+2. Créer une application Entra « Celluloplast — envoi » ; lui associer un **certificat** (pas de secret partagé). Générer la paire sur un poste d'administration :
+   `openssl req -x509 -newkey rsa:2048 -nodes -days 730 -subj "/CN=celluloplast-envoi" -keyout graph-envoi.key -out graph-envoi.crt`
+   puis téléverser `graph-envoi.crt` dans l'application Entra.
+3. Donner le droit **Application Mail.Send limité à cette seule boîte** (Exchange « Application RBAC ») ; vérifier qu'aucun octroi Entra plus large n'existe. Tester le refus sur une seconde boîte.
+4. Sur le serveur : `sudo mkdir -m 700 /opt/celluloplast/secrets`, y copier `graph-envoi.crt` et `graph-envoi.key`, puis `sudo chown 10001 secrets/* && sudo chmod 600 secrets/*`.
+5. Dans `.env` : `MAIL_MODE=graph`, `MAIL_SENDER=<boîte>`, `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, et pendant le pilote `MAIL_ALLOWED_DOMAINS=<domaine>` et/ou `MAIL_TEST_RECIPIENT=<boîte de test>`. Puis `sudo docker compose up -d`.
+6. Contrôler dans Administration → « Archivage et paramètres » et « Avis et mails » : « Accepté par Exchange » n'est pas une preuve de livraison ; « à vérifier » signale un résultat inconnu, jamais réexpédié automatiquement.
+
+## Raccorder l'archivage SharePoint
+
+Identité **distincte** de celle d'envoi : application Entra « Celluloplast — archive » avec certificat (`graph-archive.crt` / `graph-archive.key` dans `./secrets`), permission **Sites.Selected** accordée sur le seul site cible (tester le refus sur un autre site). Dans `.env` : `ARCHIVE_MODE=sharepoint`, `ARCHIVE_TENANT_ID`, `ARCHIVE_CLIENT_ID`, `ARCHIVE_SITE_ID`, `ARCHIVE_DRIVE_ID` (identifiants Graph du site et de la bibliothèque), `ARCHIVE_ROOT`. Les documents restent aussi en copie locale ; une panne est reprise automatiquement (suivi dans Administration → « Archivage et paramètres »).
+
+## Reprendre les données SharePoint
+
+Sur une **instance de test** d'abord (reprise à blanc), puis au gel final :
+
+1. Créer les sites en Administration (les libellés doivent correspondre à la colonne « Site » de la liste Personnel).
+2. Exporter chaque liste SharePoint en CSV ou en classeur Excel, **avec la colonne ID** si possible.
+3. Administration → Reprise SharePoint : charger les listes dans l'ordre proposé (Wilayas, CatalogueFormations, UtilisateursApp, ProfilsPoste, Personnel, MaterielIT, LignesMobiles, Affectations, Formations, Vehicules, AffectationsVehicules).
+4. Pour chaque lot : lire l'aperçu, décider les lignes « à revoir » (homonymes, rapprochements par le nom), puis appliquer. Les rejets se corrigent dans le fichier, rechargé ensuite comme nouveau lot.
+5. Les comptes repris n'ont pas de mot de passe : générer leur lien d'activation (Administration → Utilisateurs).
+
+Aucune arrivée, tâche ni avis n'est créé par une reprise ; les gardes reprises apparaissent comme mouvements « reprise » sans décharge. Les dossiers, tâches et modèles de tâches SharePoint ne sont pas repris : les parcours en cours se recréent dans l'application, l'ancienne application restant consultable en lecture seule.
 
 ## Passer à la version « lot 1 + lot 2 » (migration 0002)
 
