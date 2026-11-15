@@ -92,7 +92,9 @@ pub enum Evidence {
     Equipment,
     /// Compte réellement consigné par l'IT dans le système concerné.
     Account,
-    /// Travail sans preuve matérielle (carte, véhicule géré par le RH…).
+    /// Véhicule : remise enregistrée dans le dossier ou garde active.
+    Vehicle,
+    /// Travail sans preuve matérielle (carte de visite…).
     None,
 }
 
@@ -101,6 +103,7 @@ impl NeedCategory {
         match self {
             NeedCategory::Pc | NeedCategory::Telephone | NeedCategory::Sim => Evidence::Equipment,
             NeedCategory::EmailPro | NeedCategory::Xena | NeedCategory::Intelix => Evidence::Account,
+            NeedCategory::Vehicule => Evidence::Vehicle,
             _ => Evidence::None,
         }
     }

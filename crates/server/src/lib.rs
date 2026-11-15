@@ -11,6 +11,7 @@ pub mod personnel_xlsx;
 pub mod routes;
 pub mod seed;
 pub mod state;
+pub mod tabular;
 pub mod worker;
 
 use std::time::Duration;

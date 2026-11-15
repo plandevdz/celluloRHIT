@@ -49,6 +49,8 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
         pdf_font: font.into(),
         pdf_font_bold: bold.into(),
         max_upload_bytes: 2 * 1024 * 1024,
+        alert_days: 30,
+        alert_km: 1000,
     }
 }
 
@@ -129,6 +131,31 @@ impl TestApp {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({ "raw_len": bytes.len() }));
         (status, value)
+    }
+
+    /// Dépôt d'un fichier (multipart, champ « file »).
+    pub async fn upload(&self, s: &Session, uri: &str, filename: &str, bytes: &[u8]) -> (StatusCode, Value) {
+        let boundary = "CELLULOBOUNDARY";
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1{uri}"))
+            .header(header::COOKIE, &s.cookie)
+            .header("x-cellulo-client", "web")
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .body(Body::from(body))
+            .unwrap();
+        let (status, bytes) = self.raw(req).await;
+        (status, serde_json::from_slice(&bytes).unwrap_or(json!({ "raw": String::from_utf8_lossy(&bytes) })))
+    }
+
+    pub async fn count(&self, sql: &str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(self.pool()).await.unwrap()
     }
 
     pub async fn raw(&self, req: Request<Body>) -> (StatusCode, Vec<u8>) {

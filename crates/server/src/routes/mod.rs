@@ -5,8 +5,11 @@ pub mod cases;
 pub mod employees;
 pub mod imports;
 pub mod movements;
+pub mod referentials;
+pub mod reprise;
 pub mod tasks;
 pub mod trainings;
+pub mod vehicles;
 
 use axum::extract::{Request, State};
 use axum::http::{Method, StatusCode};
@@ -65,6 +68,9 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .merge(assets::routes())
         .merge(movements::routes(state.config.max_upload_bytes))
         .merge(imports::routes(state.config.max_upload_bytes))
+        .merge(reprise::routes(state.config.max_upload_bytes))
+        .merge(vehicles::routes())
+        .merge(referentials::routes())
         .fallback(not_found)
         .layer(middleware::from_fn(require_client_header))
 }

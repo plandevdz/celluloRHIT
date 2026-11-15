@@ -23,13 +23,15 @@ pub fn routes() -> Router<AppState> {
         .route("/accessories", get(list_accessories).post(create_accessory))
         .route("/accessories/{id}/stock", post(adjust_stock))
         .route("/sims", get(list_sims).post(create_sim))
+        .route("/lines", get(list_lines))
+        .route("/lines/{id}", axum::routing::patch(update_line))
 }
 
 const PARC: &[Role] = &[Role::It, Role::Admin];
 
 /// Jeton QR stable et non secret : il identifie l'actif, sans nom ni site,
 /// et ne donne aucun droit.
-fn new_qr_token() -> String {
+pub fn new_qr_token() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
     let mut rng = rand::thread_rng();
     let code: String = (0..10).map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char).collect();
@@ -59,12 +61,20 @@ struct AssetRow {
     holder_id: Option<Uuid>,
     holder_name: Option<String>,
     version: i32,
+    brand: Option<String>,
+    model: Option<String>,
+    intune_name: Option<String>,
+    purchase_date: Option<chrono::NaiveDate>,
+    warranty_end: Option<chrono::NaiveDate>,
+    condition: Option<String>,
+    location_id: Option<Uuid>,
 }
 
 const ASSET_SELECT: &str = "
     SELECT a.id, a.inventory_no, a.qr_token, a.kind, a.label, a.serial_no, a.status, a.site_id,
            s.name AS site_name, l.name AS location_name,
-           e.id AS holder_id, e.first_name || ' ' || e.last_name AS holder_name, a.version
+           e.id AS holder_id, e.first_name || ' ' || e.last_name AS holder_name, a.version,
+           a.brand, a.model, a.intune_name, a.purchase_date, a.warranty_end, a.condition, a.location_id
       FROM assets a
       LEFT JOIN sites s ON s.id = a.site_id
       LEFT JOIN locations l ON l.id = a.location_id
@@ -77,7 +87,8 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
     let rows = sqlx::query_as::<_, AssetRow>(&format!(
         "{ASSET_SELECT}
           WHERE ($1::text IS NULL OR lower(a.inventory_no) LIKE $1 OR lower(a.label) LIKE $1
-                 OR lower(coalesce(a.serial_no, '')) LIKE $1 OR lower(a.qr_token) LIKE $1)
+                 OR lower(coalesce(a.serial_no, '')) LIKE $1 OR lower(a.qr_token) LIKE $1
+                 OR lower(coalesce(a.intune_name, '')) LIKE $1 OR lower(coalesce(a.brand, '') || ' ' || coalesce(a.model, '')) LIKE $1)
             AND ($2::text IS NULL OR a.status = $2)
             AND ($3::text IS NULL OR a.kind = $3)
             AND ($4::uuid IS NULL OR a.site_id = $4)
@@ -101,6 +112,25 @@ struct CreateInput {
     site_id: Option<Uuid>,
     location_id: Option<Uuid>,
     notes: Option<String>,
+    brand: Option<String>,
+    model: Option<String>,
+    intune_name: Option<String>,
+    purchase_date: Option<chrono::NaiveDate>,
+    warranty_end: Option<chrono::NaiveDate>,
+    condition: Option<String>,
+    /// Matériel partagé mis directement en service (serveur, imprimante…).
+    #[serde(default)]
+    in_service: bool,
+}
+
+const CONDITIONS: &[&str] = &["neuf", "bon", "use", "hs"];
+
+fn check_condition(c: &Option<String>) -> AppResult<Option<String>> {
+    match c.as_deref().filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(v) if CONDITIONS.contains(&v) => Ok(Some(v.to_string())),
+        Some(_) => Err(AppError::invalid("condition", "état neuf, bon, usé ou HS")),
+    }
 }
 
 async fn create(State(state): State<AppState>, user: CurrentUser, Json(i): Json<CreateInput>) -> AppResult<Json<Value>> {
@@ -109,10 +139,12 @@ async fn create(State(state): State<AppState>, user: CurrentUser, Json(i): Json<
         .ok_or_else(|| AppError::invalid("inventory_no", "numéro d'inventaire obligatoire"))?
         .to_uppercase();
     let label = domain::text::clean(&i.label).ok_or_else(|| AppError::invalid("label", "libellé obligatoire"))?;
+    let condition = check_condition(&i.condition)?;
     let mut tx = state.pool.begin().await?;
     let (id, token): (Uuid, String) = sqlx::query_as(
-        "INSERT INTO assets (inventory_no, qr_token, kind, label, serial_no, site_id, location_id, notes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id, qr_token",
+        "INSERT INTO assets (inventory_no, qr_token, kind, label, serial_no, site_id, location_id, notes,
+                             brand, model, intune_name, purchase_date, warranty_end, condition, status)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) RETURNING id, qr_token",
     )
     .bind(&inventory_no)
     .bind(new_qr_token())
@@ -122,6 +154,13 @@ async fn create(State(state): State<AppState>, user: CurrentUser, Json(i): Json<
     .bind(i.site_id)
     .bind(i.location_id)
     .bind(i.notes.as_deref().and_then(domain::text::clean))
+    .bind(i.brand.as_deref().and_then(domain::text::clean))
+    .bind(i.model.as_deref().and_then(domain::text::clean))
+    .bind(i.intune_name.as_deref().and_then(domain::text::clean))
+    .bind(i.purchase_date)
+    .bind(i.warranty_end)
+    .bind(&condition)
+    .bind(if i.in_service { "en_service" } else { "disponible" })
     .fetch_one(&mut *tx)
     .await?;
     audit::record(&mut tx, &user, Audit { action: "entree_stock", entity: "asset", entity_id: Some(id), data: Some(json!({ "inventory_no": inventory_no })), ..Default::default() }).await?;
@@ -179,6 +218,14 @@ struct UpdateInput {
     site_id: Option<Uuid>,
     location_id: Option<Uuid>,
     notes: Option<String>,
+    brand: Option<String>,
+    model: Option<String>,
+    intune_name: Option<String>,
+    purchase_date: Option<chrono::NaiveDate>,
+    warranty_end: Option<chrono::NaiveDate>,
+    condition: Option<String>,
+    /// Motif d'une rectification de l'emplacement (inventaire).
+    reason: Option<String>,
 }
 
 /// Contrôle, réparation, réforme, emplacement. L'affectation ne se fait que
@@ -199,9 +246,13 @@ async fn update(State(state): State<AppState>, user: CurrentUser, Path(id): Path
             return Err(AppError::invalid("status", "l'affectation passe par une remise ou une restitution"));
         }
     }
+    let condition = check_condition(&i.condition)?;
     sqlx::query(
         "UPDATE assets SET status = coalesce($2, status), label = coalesce($3, label), serial_no = coalesce($4, serial_no),
                 site_id = coalesce($5, site_id), location_id = coalesce($6, location_id), notes = coalesce($7, notes),
+                brand = coalesce($8, brand), model = coalesce($9, model), intune_name = coalesce($10, intune_name),
+                purchase_date = coalesce($11, purchase_date), warranty_end = coalesce($12, warranty_end),
+                condition = coalesce($13, condition),
                 version = version + 1, updated_at = now()
           WHERE id = $1",
     )
@@ -212,9 +263,17 @@ async fn update(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     .bind(i.site_id)
     .bind(i.location_id)
     .bind(i.notes.as_deref().and_then(domain::text::clean))
+    .bind(i.brand.as_deref().and_then(domain::text::clean))
+    .bind(i.model.as_deref().and_then(domain::text::clean))
+    .bind(i.intune_name.as_deref().and_then(domain::text::clean))
+    .bind(i.purchase_date)
+    .bind(i.warranty_end)
+    .bind(&condition)
     .execute(&mut *tx)
     .await?;
-    audit::record(&mut tx, &user, Audit { action: "actif_modifie", entity: "asset", entity_id: Some(id), data: Some(json!({ "status": i.status })), ..Default::default() }).await?;
+    let reason = i.reason.as_deref().and_then(domain::text::clean);
+    let action = if reason.is_some() && (i.site_id.is_some() || i.location_id.is_some()) { "rectification_emplacement" } else { "actif_modifie" };
+    audit::record(&mut tx, &user, Audit { action, entity: "asset", entity_id: Some(id), data: Some(json!({ "status": i.status, "site": i.site_id, "local": i.location_id, "motif": reason })), ..Default::default() }).await?;
     tx.commit().await?;
     Ok(Json(json!({ "version": version + 1 })))
 }
@@ -326,6 +385,72 @@ struct SimInput {
     iccid: String,
     line_number: Option<String>,
     operator: Option<String>,
+    plan: Option<String>,
+    line_type: Option<String>,
+}
+
+fn check_line_type(t: &Option<String>) -> AppResult<Option<String>> {
+    match t.as_deref().filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(v @ ("voix" | "data" | "voix_data")) => Ok(Some(v.to_string())),
+        Some(_) => Err(AppError::invalid("line_type", "voix, data ou voix_data")),
+    }
+}
+
+async fn list_lines(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Value>> {
+    user.require(PARC)?;
+    let v: Value = sqlx::query_scalar(
+        "SELECT coalesce(jsonb_agg(jsonb_build_object('id', l.id, 'number', l.number, 'operator', l.operator, 'plan', l.plan,
+                    'line_type', l.line_type, 'status', l.status,
+                    'iccid', (SELECT s.iccid FROM sim_cards s WHERE s.line_id = l.id AND s.status <> 'desactivee' LIMIT 1),
+                    'holder', (SELECT e.first_name || ' ' || e.last_name FROM sim_cards s JOIN assignments a ON a.sim_id = s.id AND a.ended_at IS NULL
+                                 JOIN employees e ON e.id = a.employee_id WHERE s.line_id = l.id LIMIT 1))
+                    ORDER BY l.number), '[]')
+           FROM mobile_lines l",
+    )
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(v))
+}
+
+#[derive(Deserialize)]
+struct LineUpdate {
+    plan: Option<String>,
+    line_type: Option<String>,
+    status: Option<String>,
+    reason: Option<String>,
+}
+
+/// Forfait, type et statut (suspension et résiliation motivées).
+async fn update_line(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<LineUpdate>) -> AppResult<Json<Value>> {
+    user.require(PARC)?;
+    let line_type = check_line_type(&i.line_type)?;
+    let reason = i.reason.as_deref().and_then(domain::text::clean);
+    if let Some(s) = i.status.as_deref() {
+        if !["active", "suspendue", "resiliee"].contains(&s) {
+            return Err(AppError::invalid("status", "active, suspendue ou resiliee"));
+        }
+        if s != "active" && reason.is_none() {
+            return Err(AppError::invalid("reason", "motif obligatoire pour suspendre ou résilier"));
+        }
+    }
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query(
+        "UPDATE mobile_lines SET plan = coalesce($2, plan), line_type = coalesce($3, line_type), status = coalesce($4, status) WHERE id = $1",
+    )
+    .bind(id)
+    .bind(i.plan.as_deref().and_then(domain::text::clean))
+    .bind(&line_type)
+    .bind(&i.status)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("ligne"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "ligne_modifiee", entity: "mobile_line", entity_id: Some(id), data: Some(json!({ "status": i.status, "motif": reason })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn create_sim(State(state): State<AppState>, user: CurrentUser, Json(i): Json<SimInput>) -> AppResult<Json<Value>> {
@@ -341,11 +466,14 @@ async fn create_sim(State(state): State<AppState>, user: CurrentUser, Json(i): J
             let operator = i.operator.as_deref().and_then(domain::text::clean)
                 .ok_or_else(|| AppError::invalid("operator", "opérateur obligatoire pour une ligne"))?;
             let id: Uuid = sqlx::query_scalar(
-                "INSERT INTO mobile_lines (number, operator) VALUES ($1, $2)
-                 ON CONFLICT (number) DO UPDATE SET operator = mobile_lines.operator RETURNING id",
+                "INSERT INTO mobile_lines (number, operator, plan, line_type) VALUES ($1, $2, $3, $4)
+                 ON CONFLICT (number) DO UPDATE SET plan = coalesce(EXCLUDED.plan, mobile_lines.plan),
+                        line_type = coalesce(EXCLUDED.line_type, mobile_lines.line_type) RETURNING id",
             )
             .bind(&number)
             .bind(&operator)
+            .bind(i.plan.as_deref().and_then(domain::text::clean))
+            .bind(check_line_type(&i.line_type)?)
             .fetch_one(&mut *tx)
             .await?;
             Some(id)

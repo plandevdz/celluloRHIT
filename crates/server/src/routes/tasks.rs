@@ -333,7 +333,7 @@ async fn resolve(
 ) -> AppResult<(TaskResolution, Value)> {
     let evidence_kind = category.map(|c| c.evidence()).unwrap_or(Evidence::None);
     let wanted = input.resolution.unwrap_or(match evidence_kind {
-        Evidence::Equipment => TaskResolution::Remis,
+        Evidence::Equipment | Evidence::Vehicle => TaskResolution::Remis,
         _ => TaskResolution::Realise,
     });
 
@@ -435,6 +435,40 @@ async fn resolve(
                 )
             })?;
             Ok((TaskResolution::Realise, json!({ "account_id": account_id, "identifiant": identifier, "plateforme": platform })))
+        }
+        (Evidence::Vehicle, TaskResolution::Remis) => {
+            let m: Option<(Uuid, String, String)> = sqlx::query_as(
+                "SELECT m.id, m.reference, v.plate FROM vehicle_movements m JOIN vehicles v ON v.id = m.vehicle_id
+                  WHERE m.kind = 'remise' AND m.case_id = $1 AND m.employee_id = $2 ORDER BY m.effective_at DESC LIMIT 1",
+            )
+            .bind(t.case_id)
+            .bind(t.employee_id)
+            .fetch_optional(&mut *conn)
+            .await?;
+            let (id, reference, plate) = m.ok_or_else(|| {
+                AppError::invalid(
+                    "resolution",
+                    "aucune remise de véhicule dans ce dossier : enregistrez-la (Véhicules), ou choisissez « Déjà détenu » ou « Exception motivée »",
+                )
+            })?;
+            Ok((TaskResolution::Remis, json!({ "vehicle_movement_id": id, "reference": reference, "immatriculation": plate })))
+        }
+        (Evidence::Vehicle, TaskResolution::DejaDetenu) => {
+            let held: Vec<(Uuid, String)> = sqlx::query_as(
+                "SELECT a.id, v.plate FROM vehicle_assignments a JOIN vehicles v ON v.id = a.vehicle_id
+                  WHERE a.id = ANY($1) AND a.employee_id = $2 AND a.ended_at IS NULL",
+            )
+            .bind(&input.assignment_ids)
+            .bind(t.employee_id)
+            .fetch_all(&mut *conn)
+            .await?;
+            if held.is_empty() || held.len() != input.assignment_ids.len() {
+                return Err(AppError::invalid("assignment_ids", "choisissez un véhicule actuellement confié à ce salarié"));
+            }
+            Ok((
+                TaskResolution::DejaDetenu,
+                json!({ "vehicle_assignment_ids": held.iter().map(|h| h.0).collect::<Vec<_>>(), "immatriculations": held.iter().map(|h| h.1.clone()).collect::<Vec<_>>() }),
+            ))
         }
         (Evidence::None, TaskResolution::Realise) => Ok((TaskResolution::Realise, json!({}))),
         (_, other) => Err(AppError::invalid(

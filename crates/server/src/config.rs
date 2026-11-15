@@ -36,6 +36,11 @@ pub struct Config {
     pub pdf_font: PathBuf,
     pub pdf_font_bold: PathBuf,
     pub max_upload_bytes: usize,
+    /// Délai d'alerte (jours) avant une échéance : pièces de véhicule,
+    /// location, abonnements logiciels.
+    pub alert_days: i32,
+    /// Seuil d'alerte kilométrique avant un entretien.
+    pub alert_km: i32,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -73,6 +78,8 @@ impl Config {
             pdf_font: var("PDF_FONT").unwrap_or_else(|| default_font.into()).into(),
             pdf_font_bold: var("PDF_FONT_BOLD").unwrap_or_else(|| default_bold.into()).into(),
             max_upload_bytes: parse_or("MAX_UPLOAD_MB", 15)? as usize * 1024 * 1024,
+            alert_days: parse_or("ALERT_DAYS", 30)? as i32,
+            alert_km: parse_or("ALERT_KM", 1000)? as i32,
         })
     }
 }

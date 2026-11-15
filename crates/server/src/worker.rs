@@ -29,6 +29,11 @@ pub async fn run(state: AppState) -> anyhow::Result<()> {
 }
 
 pub async fn tick(state: &AppState) -> anyhow::Result<()> {
+    // Les échéances passent avant la distribution : un avis créé dans ce
+    // cycle est remis dans le même cycle.
+    if let Err(e) = check_deadlines(state).await {
+        tracing::error!(error = ?e, "contrôle des échéances en échec");
+    }
     expand_outbox(state).await?;
     deliver(state).await?;
     generate_documents(state).await?;
@@ -133,6 +138,96 @@ pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
                 tracing::info!(delivery = %id, "avis journalisé");
             }
         }
+    }
+    Ok(())
+}
+
+/// Avis émis par le serveur lui-même (sans utilisateur), dans l'outbox.
+pub async fn enqueue_system(
+    conn: &mut sqlx::PgConnection,
+    event_type: &str,
+    case_id: Option<Uuid>,
+    roles: &[&str],
+    subject: &str,
+    body: &str,
+    link_path: Option<&str>,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "INSERT INTO outbox (event_type, case_id, target_roles, subject, body, link_path, correlation_id)
+         VALUES ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(event_type)
+    .bind(case_id)
+    .bind(roles)
+    .bind(subject)
+    .bind(body)
+    .bind(link_path)
+    .bind(Uuid::new_v4())
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
+fn fr(d: Option<chrono::NaiveDate>) -> String {
+    d.map(|d| d.format("%d/%m/%Y").to_string()).unwrap_or_else(|| "—".into())
+}
+
+/// Échéances (pièces et entretien des véhicules, fins de location,
+/// abonnements logiciels) : une alerte par élément et par seuil (« proche »
+/// puis « dépassée »), jamais répétée, y compris après un redémarrage.
+pub async fn check_deadlines(state: &AppState) -> anyhow::Result<()> {
+    let today = documents::algiers_today();
+    let mut conn = state.pool.acquire().await?;
+    let items = crate::routes::vehicles::deadlines_json(&mut conn, today, state.config.alert_days, state.config.alert_km)
+        .await
+        .map_err(|e| anyhow::anyhow!("échéances véhicules : {e}"))?;
+    for it in items.as_array().cloned().unwrap_or_default() {
+        let Some(id) = it["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) else { continue };
+        let overdue = it["overdue"].as_bool().unwrap_or(false);
+        let due_key = format!(
+            "{}:{}:{}",
+            if overdue { "depassee" } else { "proche" },
+            it["due_date"].as_str().unwrap_or("-"),
+            it["due_km"].as_i64().map(|k| k.to_string()).unwrap_or_else(|| "-".into())
+        );
+        let mut tx = state.pool.begin().await?;
+        let fresh = sqlx::query("INSERT INTO alerts_sent (kind, entity_id, due_key) VALUES ('vehicule', $1, $2) ON CONFLICT DO NOTHING")
+            .bind(id)
+            .bind(&due_key)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected()
+            == 1;
+        if fresh {
+            let plate = it["plate"].as_str().unwrap_or_default();
+            let what = match it["kind"].as_str().unwrap_or_default() {
+                "assurance" => "Assurance",
+                "controle_technique" => "Contrôle technique",
+                "carte_grise" => "Carte grise",
+                "vignette" => "Vignette",
+                "fin_location" => "Fin de location",
+                "vidange" => "Vidange",
+                "entretien" => "Entretien",
+                "pneus" => "Pneus",
+                "reparation" => "Réparation",
+                _ => "Échéance",
+            };
+            let due_date = it["due_date"].as_str().and_then(|d| chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").ok());
+            let km = it["due_km"].as_i64().map(|k| format!(" ou {k} km (compteur : {} km)", it["odometer_km"].as_i64().unwrap_or(0))).unwrap_or_default();
+            let state_txt = if overdue { "dépassée" } else { "proche" };
+            let vehicle = it["vehicle_id"].as_str().unwrap_or_default();
+            enqueue_system(
+                &mut tx,
+                "echeance_vehicule",
+                None,
+                &["RH"],
+                &format!("{what} {state_txt} — véhicule {plate}"),
+                &format!("Véhicule {plate} : {what} {state_txt}, échéance le {}{km}.\nRenouvelez la pièce ou consignez l'intervention dans l'application.", fr(due_date)),
+                Some(&format!("/vehicules/{vehicle}")),
+            )
+            .await?;
+        }
+        tx.commit().await?;
     }
     Ok(())
 }

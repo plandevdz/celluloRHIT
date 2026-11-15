@@ -278,6 +278,15 @@ struct EmployeeDetail {
     manager: Option<String>,
     site_id: Option<Uuid>,
     site_name: Option<String>,
+    contract_type: Option<String>,
+    landline: Option<String>,
+    manager_employee_id: Option<Uuid>,
+    manager_employee_name: Option<String>,
+    job_profile_id: Option<Uuid>,
+    job_profile_name: Option<String>,
+    position_id: Option<Uuid>,
+    position_valid_from: Option<NaiveDate>,
+    wilayas: Value,
 }
 
 async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
@@ -288,11 +297,17 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     let e = sqlx::query_as::<_, EmployeeDetail>(
         "SELECT e.id, e.matricule, e.first_name, e.last_name, e.status, e.planned_arrival, e.actual_arrival,
                 e.exit_date, e.m365_verified_at, e.arrival_confirmed_at, cu.display_name AS arrival_confirmed_by_name,
-                e.version, p.job_title, p.department, p.manager, p.site_id, s.name AS site_name
+                e.version, p.job_title, p.department, p.manager, p.site_id, s.name AS site_name,
+                e.contract_type, e.landline, p.manager_employee_id, me.first_name || ' ' || me.last_name AS manager_employee_name,
+                p.job_profile_id, jp.name AS job_profile_name, p.id AS position_id, p.valid_from AS position_valid_from,
+                (SELECT coalesce(jsonb_agg(jsonb_build_object('id', w.id, 'code', w.code, 'name', w.name) ORDER BY w.code), '[]')
+                   FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilayas
            FROM employees e
            LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
            LEFT JOIN sites s ON s.id = p.site_id
            LEFT JOIN users cu ON cu.id = e.arrival_confirmed_by
+           LEFT JOIN employees me ON me.id = p.manager_employee_id
+           LEFT JOIN job_profiles jp ON jp.id = p.job_profile_id
           WHERE e.id = $1",
     )
     .bind(id)
@@ -517,7 +532,21 @@ struct UpdateInput {
     last_name: Option<String>,
     /// `Some("")` efface volontairement le matricule (tracé).
     matricule: Option<String>,
+    /// `Some("")` efface le type de contrat.
+    contract_type: Option<String>,
+    landline: Option<String>,
+    /// Remplace la liste des wilayas couvertes.
+    wilaya_ids: Option<Vec<Uuid>>,
+    /// Données organisationnelles de la situation en cours (sans changer
+    /// de poste : une mutation passe par un dossier MUT).
+    manager_employee_id: Option<Uuid>,
+    #[serde(default)]
+    clear_manager: bool,
+    job_profile_id: Option<Uuid>,
+    department: Option<String>,
 }
+
+pub const CONTRACT_TYPES: &[&str] = &["cdi", "cdd", "stage", "interim", "apprentissage", "consultant"];
 
 async fn update(
     State(state): State<AppState>,
@@ -537,6 +566,15 @@ async fn update(
     if version != input.version {
         return Err(AppError::stale());
     }
+    let contract = match input.contract_type.as_deref() {
+        None => None,
+        Some("") => Some(None),
+        Some(c) if CONTRACT_TYPES.contains(&c) => Some(Some(c.to_string())),
+        Some(_) => return Err(AppError::invalid("contract_type", "type de contrat inconnu")),
+    };
+    if input.manager_employee_id == Some(id) {
+        return Err(AppError::invalid("manager_employee_id", "un salarié ne peut pas être son propre manager"));
+    }
     let first = match &input.first_name { Some(v) => required("first_name", v, "prénom")?, None => first };
     let last = match &input.last_name { Some(v) => required("last_name", v, "nom")?, None => last };
     let new_matricule = match &input.matricule { Some(v) => domain::text::clean(v), None => matricule.clone() };
@@ -553,6 +591,41 @@ async fn update(
     .bind(&norm)
     .execute(&mut *tx)
     .await?;
+    if let Some(c) = &contract {
+        sqlx::query("UPDATE employees SET contract_type = $2 WHERE id = $1").bind(id).bind(c).execute(&mut *tx).await?;
+    }
+    if let Some(l) = &input.landline {
+        sqlx::query("UPDATE employees SET landline = $2 WHERE id = $1").bind(id).bind(domain::text::clean(l)).execute(&mut *tx).await?;
+    }
+    if let Some(ws) = &input.wilaya_ids {
+        sqlx::query("DELETE FROM employee_wilayas WHERE employee_id = $1").bind(id).execute(&mut *tx).await?;
+        for w in ws {
+            sqlx::query("INSERT INTO employee_wilayas (employee_id, wilaya_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+                .bind(id)
+                .bind(w)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    if input.manager_employee_id.is_some() || input.clear_manager || input.job_profile_id.is_some() || input.department.is_some() {
+        sqlx::query(
+            "UPDATE employee_positions
+                SET manager_employee_id = CASE WHEN $5 THEN NULL ELSE coalesce($2, manager_employee_id) END,
+                    manager = CASE WHEN $5 THEN NULL
+                                   WHEN $2::uuid IS NOT NULL THEN (SELECT first_name || ' ' || last_name FROM employees WHERE id = $2)
+                                   ELSE manager END,
+                    job_profile_id = coalesce($3, job_profile_id),
+                    department = CASE WHEN $4::text IS NULL THEN department ELSE nullif($4, '') END
+              WHERE employee_id = $1 AND valid_to IS NULL",
+        )
+        .bind(id)
+        .bind(input.manager_employee_id)
+        .bind(input.job_profile_id)
+        .bind(input.department.as_deref().map(|d| domain::text::clean(d).unwrap_or_default()))
+        .bind(input.clear_manager)
+        .execute(&mut *tx)
+        .await?;
+    }
     audit::record(
         &mut tx,
         &user,
@@ -561,7 +634,10 @@ async fn update(
             entity: "employee",
             entity_id: Some(id),
             employee_id: Some(id),
-            data: Some(json!({ "matricule_avant": matricule, "matricule_apres": new_matricule })),
+            data: Some(json!({
+                "matricule_avant": matricule, "matricule_apres": new_matricule, "contrat": contract,
+                "manager": input.manager_employee_id, "profil": input.job_profile_id, "wilayas": input.wilaya_ids,
+            })),
             ..Default::default()
         },
     )

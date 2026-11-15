@@ -38,6 +38,9 @@ pub struct NeedDto {
     pub quantity: Option<i32>,
     pub preference: Option<PcPreference>,
     pub detail: Option<String>,
+    /// `profil` si la valeur vient de la suggestion du profil de poste.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 impl NeedDto {
@@ -71,6 +74,11 @@ struct ArrivalInput {
     matricule: Option<String>,
     department: Option<String>,
     manager: Option<String>,
+    manager_employee_id: Option<Uuid>,
+    job_profile_id: Option<Uuid>,
+    contract_type: Option<String>,
+    #[serde(default)]
+    wilaya_ids: Vec<Uuid>,
     #[serde(default)]
     needs: Vec<NeedDto>,
     #[serde(default)]
@@ -374,6 +382,39 @@ async fn create_arrival(
             .await?
         }
     };
+    if let Some(ct) = input.contract_type.as_deref().filter(|c| !c.is_empty()) {
+        if !crate::routes::employees::CONTRACT_TYPES.contains(&ct) {
+            return Err(AppError::invalid("contract_type", "type de contrat inconnu"));
+        }
+    }
+    // Informations organisationnelles facultatives, sur une fiche nouvelle
+    // ou complétées sur une fiche existante choisie.
+    sqlx::query(
+        "UPDATE employees SET contract_type = coalesce(nullif($2, ''), contract_type) WHERE id = $1",
+    )
+    .bind(employee_id)
+    .bind(&input.contract_type)
+    .execute(&mut *tx)
+    .await?;
+    if input.employee_id.is_none() {
+        sqlx::query(
+            "UPDATE employee_positions SET job_profile_id = $2, manager_employee_id = $3,
+                    manager = coalesce(manager, (SELECT first_name || ' ' || last_name FROM employees WHERE id = $3))
+              WHERE employee_id = $1 AND valid_to IS NULL",
+        )
+        .bind(employee_id)
+        .bind(input.job_profile_id)
+        .bind(input.manager_employee_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for w in &input.wilaya_ids {
+        sqlx::query("INSERT INTO employee_wilayas (employee_id, wilaya_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(employee_id)
+            .bind(w)
+            .execute(&mut *tx)
+            .await?;
+    }
     let site_name: String = sqlx::query_scalar("SELECT name FROM sites WHERE id = $1")
         .bind(input.site_id)
         .fetch_optional(&mut *tx)
@@ -395,12 +436,16 @@ async fn create_arrival(
 
     // Tous les besoins existent dès l'annonce ; non renseigné = à préciser.
     let mut needs: Vec<NeedInput> = Vec::new();
+    let mut profile_categories: Vec<NeedCategory> = Vec::new();
     for category in NeedCategory::ALL {
         let given = input.needs.iter().find(|n| n.category == *category);
         let mut n = match given {
             Some(dto) => dto.to_input(),
             None => NeedInput { category: *category, answer: NeedAnswer::APreciser, quantity: None, preference: None, detail: None },
         };
+        if given.and_then(|g| g.origin.as_deref()) == Some("profil") {
+            profile_categories.push(*category);
+        }
         if *category == NeedCategory::Formation && !input.trainings.is_empty() {
             n.answer = NeedAnswer::Oui;
         }
@@ -408,10 +453,18 @@ async fn create_arrival(
     }
     let mut lines_by_role: Vec<(Role, String)> = Vec::new();
     let mut tasks_created = 0;
+    let _ = &profile_categories;
     for n in &needs {
         let effect = apply_need(&mut tx, &user, case_id, n, Some(input.planned_arrival)).await?;
         if effect.task_created {
             tasks_created += 1;
+        }
+        if profile_categories.contains(&n.category) {
+            sqlx::query("UPDATE case_needs SET origin = 'profil' WHERE case_id = $1 AND category = $2")
+                .bind(case_id)
+                .bind(n.category.as_str())
+                .execute(&mut *tx)
+                .await?;
         }
         if n.answer == NeedAnswer::Oui && n.category != NeedCategory::Formation {
             lines_by_role.push((n.category.responsible_role(), describe_need(n)));
@@ -630,6 +683,7 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
                     'id', n.id, 'category', n.category, 'answer', n.answer, 'quantity', n.quantity,
                     'preference', n.preference, 'detail', n.detail, 'revision', n.revision, 'updated_at', n.updated_at,
+                    'origin', n.origin,
                     'updated_by', u.display_name,
                     'history', (SELECT coalesce(jsonb_agg(jsonb_build_object('revision', r.revision, 'answer', r.answer,
                                       'preference', r.preference, 'quantity', r.quantity, 'detail', r.detail,
@@ -790,7 +844,7 @@ async fn update_needs(
     let mut lines: Vec<String> = Vec::new();
     let mut needs = input.needs.clone();
     if !input.trainings.is_empty() && !needs.iter().any(|n| n.category == NeedCategory::Formation) {
-        needs.push(NeedDto { category: NeedCategory::Formation, answer: NeedAnswer::Oui, quantity: None, preference: None, detail: None });
+        needs.push(NeedDto { category: NeedCategory::Formation, answer: NeedAnswer::Oui, quantity: None, preference: None, detail: None, origin: None });
     }
     for dto in &needs {
         let effect = apply_need(&mut tx, &user, case_id, &dto.to_input(), due).await?;
