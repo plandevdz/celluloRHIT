@@ -14,10 +14,13 @@ import {
   fmtDateTime,
   needLabel,
   preferenceLabel,
+  resolutionLabel,
   roleLabel,
   sessionStatusLabel,
   taskStatusLabel,
+  visibilityText,
 } from "../labels";
+import { CompleteTaskDialog, ConfirmArrivalDialog } from "./TaskDialogs";
 import { DocumentActions } from "./DocumentActions";
 import { emptyNeeds, NeedsEditor, needsPayload, NeedValue, TrainingValue } from "./NeedsEditor";
 
@@ -30,6 +33,8 @@ type CaseDetail = {
   children: any[];
   history: any[];
   notifications: any[];
+  scope: "complet" | "equipe";
+  mail_mode: string;
 };
 
 export default function CasePage() {
@@ -37,12 +42,14 @@ export default function CasePage() {
   const { user, has } = useAuth();
   const detail = useLoad(() => api<CaseDetail>(`/cases/${encodeURIComponent(reference)}`), [reference]);
   const cmd = useCommand();
-  const [dialog, setDialog] = useState<null | { kind: "block" | "complete"; task: any } | { kind: "needs" } | { kind: "close" }>(null);
+  const [dialog, setDialog] = useState<
+    null | { kind: "block" | "complete"; task: any } | { kind: "needs" } | { kind: "close" } | { kind: "arrival" }
+  >(null);
 
   if (detail.loading && !detail.data) return <Loading />;
   if (detail.error) return <ErrorBox error={detail.error} onRetry={detail.reload} />;
   if (!detail.data) return null;
-  const { case: c, needs, tasks, trainings, movements, children, history, notifications } = detail.data;
+  const { case: c, needs, tasks, trainings, movements, children, history, notifications, scope, mail_mode } = detail.data;
   const isHr = has("RH", "ADMIN");
   const isOpen = c.status === "ouvert";
 
@@ -77,6 +84,11 @@ export default function CasePage() {
             <Link className="btn" to={`/personnel/${c.employee_id}`}>
               Fiche salarié
             </Link>
+            {isHr && c.kind === "ONB" && c.employee_status === "a_venir" && (
+              <button className="btn btn-primary" onClick={() => setDialog({ kind: "arrival" })}>
+                Confirmer l'arrivée
+              </button>
+            )}
             {isHr && isOpen && (
               <>
                 <button className="btn" onClick={() => setDialog({ kind: "needs" })}>
@@ -93,6 +105,9 @@ export default function CasePage() {
       <ErrorBox error={cmd.error} />
       {isHr && c.note && <Notice kind="info">Note RH : {c.note}</Notice>}
       {c.close_note && <Notice kind="info">Clôture : {c.close_note}</Notice>}
+      {scope === "equipe" && (
+        <p className="small muted">Vue limitée aux éléments utiles à votre équipe.</p>
+      )}
 
       <div className="grid-2">
         <div className="stack">
@@ -136,6 +151,7 @@ export default function CasePage() {
             )}
           </Section>
 
+          {(isHr || has("IT")) && (
           <Section title="Remis et restitué">
             {movements.length === 0 ? (
               <Empty>Aucun mouvement de matériel pour ce dossier.</Empty>
@@ -165,6 +181,7 @@ export default function CasePage() {
               ))
             )}
           </Section>
+          )}
 
           {trainings.length > 0 && (
             <Section title="Formations" actions={<Link to="/formations">Ouvrir les formations</Link>}>
@@ -212,6 +229,24 @@ export default function CasePage() {
                         </td>
                         <td>
                           <Badge status={t.status} label={taskStatusLabel[t.status]} />
+                          {t.status === "termine" && (
+                            <div>
+                              {t.resolution ? (
+                                <Badge
+                                  status={t.resolution === "exception" ? "a_verifier" : "termine"}
+                                  label={resolutionLabel[t.resolution]}
+                                />
+                              ) : (
+                                <span className="small muted">Terminée avant le contrôle des preuves</span>
+                              )}
+                              {t.resolution_evidence?.movements && (
+                                <div className="small">Preuve : {t.resolution_evidence.movements.join(", ")}</div>
+                              )}
+                              {t.resolution_evidence?.remises_d_origine && (
+                                <div className="small">Détenu via : {t.resolution_evidence.remises_d_origine.join(", ")}</div>
+                              )}
+                            </div>
+                          )}
                           {t.owner && <div className="small">{t.owner}</div>}
                           {t.completed_at && <div className="small muted">{fmtDateTime(t.completed_at)}</div>}
                         </td>
@@ -251,25 +286,44 @@ export default function CasePage() {
             )}
           </Section>
 
-          <Section title="Avis envoyés aux équipes">
-            {notifications.length === 0 ? (
-              <Empty>Aucun avis.</Empty>
-            ) : (
-              <ul className="timeline">
-                {notifications.map((n, i) => (
-                  <li key={i}>
-                    {n.subject}
-                    <div className="small muted">
-                      {fmtDateTime(n.created_at)} ·{" "}
-                      {n.status === "en_attente"
-                        ? "en file d'envoi"
-                        : `${n.delivered}/${n.recipients} ${deliveryStatusLabel.journalise.toLowerCase()}${n.failed ? ` · ${n.failed} à vérifier` : ""}`}
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
+          {scope === "complet" && (
+            <Section title="Avis aux équipes">
+              {mail_mode === "journal" && (
+                <p className="small muted">Mode test : les avis sont consignés, aucun e-mail n'est envoyé.</p>
+              )}
+              {notifications.length === 0 ? (
+                <Empty>Aucun avis.</Empty>
+              ) : (
+                <ul className="timeline">
+                  {notifications.map((n, i) => (
+                    <li key={i}>
+                      {n.subject}
+                      <div className="small">{visibilityText(n.target_roles, mail_mode)}</div>
+                      <div className="small muted">
+                        {fmtDateTime(n.created_at)} ·{" "}
+                        {n.status === "en_attente"
+                          ? "destinataires pas encore résolus"
+                          : [
+                              `${n.recipients} destinataire(s)`,
+                              n.logged ? `${n.logged} ${deliveryStatusLabel.journalise.toLowerCase()}` : null,
+                              n.accepted ? `${n.accepted} accepté(s) par Exchange` : null,
+                              n.pending ? `${n.pending} en attente` : null,
+                              n.failed ? `${n.failed} en erreur` : null,
+                            ]
+                              .filter(Boolean)
+                              .join(" · ")}
+                      </div>
+                      {n.missing_roles?.length > 0 && (
+                        <div className="small" style={{ color: "var(--danger)" }}>
+                          Aucun utilisateur actif : {n.missing_roles.map((r: string) => roleLabel[r]).join(", ")}
+                        </div>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </Section>
+          )}
 
           {children.length > 0 && (
             <Section title="Demandes liées">
@@ -311,15 +365,23 @@ export default function CasePage() {
         />
       )}
       {dialog?.kind === "complete" && (
-        <ReasonDialog
-          title={`Terminer : ${dialog.task.title}`}
-          label="Observation (obligatoire si aucun matériel remis ou compte consigné)"
-          confirm="Terminer la tâche"
-          optional
-          onCancel={() => setDialog(null)}
-          onConfirm={async (note) => {
-            const r = await act(`/tasks/${dialog.task.id}/complete`, { note: note || null });
-            if (r) setDialog(null);
+        <CompleteTaskDialog
+          task={dialog.task}
+          employeeId={c.employee_id}
+          onClose={() => setDialog(null)}
+          onDone={() => {
+            setDialog(null);
+            detail.reload();
+          }}
+        />
+      )}
+      {dialog?.kind === "arrival" && (
+        <ConfirmArrivalDialog
+          employee={{ id: c.employee_id, first_name: c.first_name, last_name: c.last_name, status: c.employee_status, planned_arrival: c.effective_date }}
+          onClose={() => setDialog(null)}
+          onDone={() => {
+            setDialog(null);
+            detail.reload();
           }}
         />
       )}

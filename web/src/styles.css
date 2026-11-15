@@ -151,6 +151,8 @@ input[type="checkbox"], input[type="radio"] { width: 1.05rem; height: 1.05rem; }
 .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 0 1rem; }
 .inline-choice { display: flex; gap: .9rem; flex-wrap: wrap; align-items: center; }
 .inline-choice label { display: inline-flex; gap: .3rem; align-items: center; cursor: pointer; }
+.choice-row { display: flex; gap: .5rem; align-items: flex-start; margin-bottom: .45rem; cursor: pointer; }
+.choice-row input { margin-top: .2rem; flex: none; }
 .filters { display: flex; gap: .6rem; flex-wrap: wrap; align-items: flex-end; margin-bottom: .75rem; }
 .filters .field { margin-bottom: 0; }
 fieldset { border: 1px solid var(--border); border-radius: var(--radius); padding: .6rem .9rem .3rem; margin: 0 0 1rem; }

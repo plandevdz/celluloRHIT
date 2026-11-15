@@ -211,6 +211,8 @@ async fn update_session(
                 claimed_at = coalesce(claimed_at, now()),
                 completed_at = CASE WHEN $2 = 'termine' THEN now() ELSE NULL END,
                 completed_by = CASE WHEN $2 = 'termine' THEN $4 ELSE NULL END,
+                resolution = CASE WHEN $2 = 'termine' THEN $5 ELSE NULL END,
+                resolution_evidence = CASE WHEN $2 = 'termine' THEN jsonb_build_object('session', $1::text, 'motif', $6::text) ELSE NULL END,
                 version = version + 1, updated_at = now()
           WHERE training_session_id = $1 AND status NOT IN ('termine', 'annule')",
     )
@@ -218,6 +220,9 @@ async fn update_session(
     .bind(task_status)
     .bind(task_owner)
     .bind(user.id)
+    // Une dispense est une exception motivée, pas une formation réalisée.
+    .bind(if new_status == "dispensee" { "exception" } else { "realise" })
+    .bind(&reason)
     .execute(&mut *tx)
     .await?;
     audit::record(

@@ -14,7 +14,7 @@ pub mod text;
 pub use cases::{CaseKind, CaseStatus};
 pub use needs::{NeedAnswer, NeedCategory, PcPreference};
 pub use roles::Role;
-pub use tasks::{TaskAction, TaskStatus};
+pub use tasks::{TaskAction, TaskResolution, TaskStatus};
 
 /// Erreur de règle métier, traduite en 409/422 par l'API.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]

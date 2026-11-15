@@ -2,8 +2,9 @@ use axum::extract::{Path, Query, State};
 use axum::routing::{get, post};
 use axum::{Json, Router};
 use chrono::{DateTime, NaiveDate, Utc};
+use domain::needs::Evidence;
 use domain::tasks::transition;
-use domain::{Role, TaskAction, TaskStatus};
+use domain::{NeedCategory, Role, TaskAction, TaskResolution, TaskStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sqlx::FromRow;
@@ -56,6 +57,7 @@ struct TaskRow {
     need_category: Option<String>,
     need_preference: Option<String>,
     training_session_id: Option<Uuid>,
+    resolution: Option<String>,
 }
 
 /// « Mon travail » : files cumulées de toutes mes habilitations, sans
@@ -81,7 +83,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
                 t.blocked_reason, t.claimed_at, t.completed_at, t.version,
                 c.id AS case_id, c.reference AS case_reference, c.kind AS case_kind,
                 e.id AS employee_id, e.first_name || ' ' || e.last_name AS employee_name, s.name AS site_name,
-                n.category AS need_category, n.preference AS need_preference, t.training_session_id
+                n.category AS need_category, n.preference AS need_preference, t.training_session_id, t.resolution
            FROM tasks t
            JOIN cases c ON c.id = t.case_id
            JOIN employees e ON e.id = c.employee_id
@@ -148,20 +150,23 @@ struct Locked {
     status: TaskStatus,
     owner_id: Option<Uuid>,
     need_category: Option<String>,
+    need_quantity: Option<i32>,
     training_session_id: Option<Uuid>,
     employee_id: Uuid,
 }
 
+type LockedRow = (Uuid, String, String, Option<Uuid>, Option<String>, Option<i32>, Option<Uuid>, Uuid);
+
 async fn lock_task(conn: &mut sqlx::PgConnection, id: Uuid) -> AppResult<Locked> {
-    let row: Option<(Uuid, String, String, Option<Uuid>, Option<String>, Option<Uuid>, Uuid)> = sqlx::query_as(
-        "SELECT t.case_id, t.role, t.status, t.owner_id, n.category, t.training_session_id, c.employee_id
+    let row: Option<LockedRow> = sqlx::query_as(
+        "SELECT t.case_id, t.role, t.status, t.owner_id, n.category, n.quantity, t.training_session_id, c.employee_id
            FROM tasks t JOIN cases c ON c.id = t.case_id LEFT JOIN case_needs n ON n.id = t.need_id
           WHERE t.id = $1 FOR UPDATE OF t",
     )
     .bind(id)
     .fetch_optional(conn)
     .await?;
-    let (case_id, role, status, owner_id, need_category, training_session_id, employee_id) =
+    let (case_id, role, status, owner_id, need_category, need_quantity, training_session_id, employee_id) =
         row.ok_or_else(|| AppError::not_found("tâche"))?;
     Ok(Locked {
         case_id,
@@ -169,6 +174,7 @@ async fn lock_task(conn: &mut sqlx::PgConnection, id: Uuid) -> AppResult<Locked>
         status: TaskStatus::parse(&status).ok_or_else(|| anyhow::anyhow!("statut de tâche inconnu"))?,
         owner_id,
         need_category,
+        need_quantity,
         training_session_id,
         employee_id,
     })
@@ -191,27 +197,18 @@ async fn act(
     let next = transition(t.status, action, is_owner)?;
     let reason = reason.as_deref().and_then(domain::text::clean);
 
-    match action {
-        TaskAction::Block if reason.is_none() => {
-            return Err(AppError::invalid("reason", "indiquez la raison de l'attente"));
-        }
-        TaskAction::Complete => {
-            if t.training_session_id.is_some() {
-                return Err(AppError::invalid("task", "une formation se termine depuis sa session (réalisée ou dispensée)"));
-            }
-            check_completion_prerequisite(&mut tx, id, &t, reason.as_deref()).await?;
-        }
-        _ => {}
+    if action == TaskAction::Block && reason.is_none() {
+        return Err(AppError::invalid("reason", "indiquez la raison de l'attente"));
+    }
+    if action == TaskAction::Complete {
+        return Err(AppError::invalid("action", "utilisez la commande de fin de tâche avec sa preuve"));
     }
 
     let owner = if next == TaskStatus::AFaire { None } else { t.owner_id };
     sqlx::query(
         "UPDATE tasks SET status = $2, owner_id = $3,
                 blocked_reason = CASE WHEN $2 = 'bloque' THEN $4 ELSE NULL END,
-                done_note = CASE WHEN $2 = 'termine' THEN $4 ELSE done_note END,
                 claimed_at = CASE WHEN $2 = 'a_faire' THEN NULL ELSE claimed_at END,
-                completed_at = CASE WHEN $2 = 'termine' THEN now() ELSE NULL END,
-                completed_by = CASE WHEN $2 = 'termine' THEN $5 ELSE NULL END,
                 version = version + 1, updated_at = now()
           WHERE id = $1",
     )
@@ -219,7 +216,6 @@ async fn act(
     .bind(next.as_str())
     .bind(owner)
     .bind(&reason)
-    .bind(user.id)
     .execute(&mut *tx)
     .await?;
     let action_name = match action {
@@ -227,7 +223,7 @@ async fn act(
         TaskAction::Release => "tache_liberee",
         TaskAction::Block => "tache_en_attente",
         TaskAction::Unblock => "tache_reprise",
-        TaskAction::Complete => "tache_terminee",
+        TaskAction::Complete => unreachable!(),
     };
     audit::record(
         &mut tx,
@@ -246,51 +242,18 @@ async fn act(
     Ok(Json(json!({ "status": next })))
 }
 
-/// Seul un prérequis concret bloque une action précise : un matériel doit
-/// avoir été remis (préparé ≠ remis), une adresse doit être consignée.
-/// À défaut, une observation explique la clôture (ex. matériel déjà détenu).
-async fn check_completion_prerequisite(
-    conn: &mut sqlx::PgConnection,
-    task_id: Uuid,
-    t: &Locked,
-    note: Option<&str>,
-) -> AppResult<()> {
-    let satisfied = match t.need_category.as_deref() {
-        Some("pc") | Some("telephone") | Some("sim") => sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM movements WHERE task_id = $1 AND kind = 'remise')",
-        )
-        .bind(task_id)
-        .fetch_one(&mut *conn)
-        .await?,
-        Some("email_pro") => sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM employee_accounts WHERE employee_id = $1 AND system = 'email' AND status <> 'coupe')",
-        )
-        .bind(t.employee_id)
-        .fetch_one(&mut *conn)
-        .await?,
-        Some("xena") | Some("intelix") => sqlx::query_scalar::<_, bool>(
-            "SELECT EXISTS (SELECT 1 FROM employee_accounts WHERE employee_id = $1 AND system = $2 AND status <> 'coupe')",
-        )
-        .bind(t.employee_id)
-        .bind(t.need_category.as_deref())
-        .fetch_one(&mut *conn)
-        .await?,
-        _ => true,
-    };
-    if !satisfied && note.is_none() {
-        let what = match t.need_category.as_deref() {
-            Some("email_pro") => "consignez l'adresse réelle (plateforme cPanel ou Microsoft 365)",
-            Some("xena") | Some("intelix") => "consignez l'identifiant réellement ouvert",
-            _ => "enregistrez la remise du matériel",
-        };
-        return Err(AppError::invalid("note", format!("{what}, ou expliquez en observation pourquoi la tâche est terminée")));
-    }
-    Ok(())
-}
-
 #[derive(Deserialize, Default)]
 struct ReasonInput {
     reason: Option<String>,
+}
+
+#[derive(Deserialize, Default)]
+struct CompleteInput {
+    /// remis | deja_detenu | exception | realise ; déduit si absent.
+    resolution: Option<TaskResolution>,
+    /// Pour « déjà détenu » : affectations actives qui couvrent le besoin.
+    #[serde(default)]
+    assignment_ids: Vec<Uuid>,
     note: Option<String>,
 }
 
@@ -306,9 +269,179 @@ async fn unblock(State(state): State<AppState>, user: CurrentUser, Path(id): Pat
     act(&state, &user, id, TaskAction::Unblock, None).await
 }
 
-async fn complete(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, body: Option<Json<ReasonInput>>) -> AppResult<Json<Value>> {
-    let note = body.and_then(|Json(i)| i.note.or(i.reason));
-    act(&state, &user, id, TaskAction::Complete, note).await
+/// Fin de tâche avec sa preuve. Matériel : « remis » (lignes de remise de la
+/// bonne catégorie, en quantité suffisante), « déjà détenu » (affectation
+/// active vérifiable) ou « exception motivée » (jamais comptée comme
+/// matériel remis). Accès : compte consigné ou exception motivée.
+async fn complete(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+    body: Option<Json<CompleteInput>>,
+) -> AppResult<Json<Value>> {
+    let input = body.map(|Json(i)| i).unwrap_or_default();
+    let note = input.note.as_deref().and_then(domain::text::clean);
+    let mut tx = state.pool.begin().await?;
+    let t = lock_task(&mut tx, id).await?;
+    let in_team = user.roles.iter().any(|r| r.as_str() == t.role);
+    if !in_team && t.owner_id != Some(user.id) {
+        return Err(AppError::forbidden());
+    }
+    transition(t.status, TaskAction::Complete, t.owner_id == Some(user.id))?;
+    if t.training_session_id.is_some() {
+        return Err(AppError::invalid("task", "une formation se termine depuis sa session (réalisée ou dispensée)"));
+    }
+    let category = t.need_category.as_deref().and_then(NeedCategory::parse);
+    let (resolution, evidence) = resolve(&mut tx, &t, category, &input, note.as_deref()).await?;
+
+    sqlx::query(
+        "UPDATE tasks SET status = 'termine', blocked_reason = NULL, done_note = $2,
+                resolution = $3, resolution_evidence = $4,
+                completed_at = now(), completed_by = $5, version = version + 1, updated_at = now()
+          WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&note)
+    .bind(resolution.as_str())
+    .bind(&evidence)
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?;
+    audit::record(
+        &mut tx,
+        &user,
+        Audit {
+            action: if resolution == TaskResolution::Exception { "tache_soldee_par_exception" } else { "tache_terminee" },
+            entity: "task",
+            entity_id: Some(id),
+            case_id: Some(t.case_id),
+            data: Some(json!({ "resolution": resolution, "preuve": evidence, "observation": note })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "status": "termine", "resolution": resolution, "evidence": evidence })))
+}
+
+async fn resolve(
+    conn: &mut sqlx::PgConnection,
+    t: &Locked,
+    category: Option<NeedCategory>,
+    input: &CompleteInput,
+    note: Option<&str>,
+) -> AppResult<(TaskResolution, Value)> {
+    let evidence_kind = category.map(|c| c.evidence()).unwrap_or(Evidence::None);
+    let wanted = input.resolution.unwrap_or(match evidence_kind {
+        Evidence::Equipment => TaskResolution::Remis,
+        _ => TaskResolution::Realise,
+    });
+
+    if wanted == TaskResolution::Exception {
+        let motif = note.ok_or_else(|| AppError::invalid("note", "le motif de l'exception est obligatoire"))?;
+        return Ok((TaskResolution::Exception, json!({ "motif": motif })));
+    }
+
+    match (evidence_kind, wanted) {
+        (Evidence::Equipment, TaskResolution::Remis) => {
+            let c = category.expect("catégorie matériel");
+            let needed = t.need_quantity.unwrap_or(1);
+            // Lignes réellement remises à ce salarié dans ce dossier.
+            let lines: Vec<(Uuid, String, String, Option<String>, i32)> = sqlx::query_as(
+                "SELECT ml.id, m.reference, ml.item_type, a.kind, ml.quantity
+                   FROM movement_lines ml
+                   JOIN movements m ON m.id = ml.movement_id
+                   LEFT JOIN assets a ON a.id = ml.asset_id
+                  WHERE m.kind = 'remise' AND m.case_id = $1 AND m.employee_id = $2
+                  ORDER BY m.effective_at, ml.line_no",
+            )
+            .bind(t.case_id)
+            .bind(t.employee_id)
+            .fetch_all(&mut *conn)
+            .await?;
+            let matching: Vec<_> = lines.iter().filter(|l| c.matches_item(&l.2, l.3.as_deref())).collect();
+            let delivered: i32 = matching.iter().map(|l| l.4).sum();
+            if delivered < needed {
+                return Err(AppError::invalid(
+                    "resolution",
+                    format!(
+                        "{} : {delivered}/{needed} remis dans ce dossier. Enregistrez la remise, ou choisissez « Déjà détenu » ou « Exception motivée ».",
+                        c.label()
+                    ),
+                ));
+            }
+            Ok((
+                TaskResolution::Remis,
+                json!({
+                    "movement_line_ids": matching.iter().map(|l| l.0).collect::<Vec<_>>(),
+                    "movements": matching.iter().map(|l| l.1.clone()).collect::<std::collections::BTreeSet<_>>(),
+                    "quantite": delivered,
+                }),
+            ))
+        }
+        (Evidence::Equipment, TaskResolution::DejaDetenu) => {
+            let c = category.expect("catégorie matériel");
+            if input.assignment_ids.is_empty() {
+                return Err(AppError::invalid("assignment_ids", "choisissez le bien déjà détenu par le salarié"));
+            }
+            let held: Vec<(Uuid, String, Option<String>, i32, String)> = sqlx::query_as(
+                "SELECT asg.id, asg.item_type, a.kind, asg.open_quantity, m.reference
+                   FROM assignments asg
+                   JOIN movement_lines ml ON ml.id = asg.handover_line_id
+                   JOIN movements m ON m.id = ml.movement_id
+                   LEFT JOIN assets a ON a.id = asg.asset_id
+                  WHERE asg.id = ANY($1) AND asg.employee_id = $2 AND asg.ended_at IS NULL",
+            )
+            .bind(&input.assignment_ids)
+            .bind(t.employee_id)
+            .fetch_all(&mut *conn)
+            .await?;
+            if held.len() != input.assignment_ids.len() || !held.iter().all(|h| c.matches_item(&h.1, h.2.as_deref())) {
+                return Err(AppError::invalid(
+                    "assignment_ids",
+                    format!("affectation non vérifiable : le bien doit être un {} actuellement détenu par ce salarié", c.label()),
+                ));
+            }
+            let total: i32 = held.iter().map(|h| h.3).sum();
+            if total < t.need_quantity.unwrap_or(1) {
+                return Err(AppError::invalid("assignment_ids", "quantité détenue insuffisante pour le besoin"));
+            }
+            Ok((
+                TaskResolution::DejaDetenu,
+                json!({
+                    "assignment_ids": held.iter().map(|h| h.0).collect::<Vec<_>>(),
+                    "remises_d_origine": held.iter().map(|h| h.4.clone()).collect::<Vec<_>>(),
+                }),
+            ))
+        }
+        (Evidence::Account, TaskResolution::Realise) => {
+            let system = category.and_then(|c| c.account_system()).expect("système de compte");
+            let account: Option<(Uuid, String, Option<String>)> = sqlx::query_as(
+                "SELECT id, identifier, platform FROM employee_accounts
+                  WHERE employee_id = $1 AND system = $2 AND status <> 'coupe' ORDER BY created_at DESC LIMIT 1",
+            )
+            .bind(t.employee_id)
+            .bind(system)
+            .fetch_optional(&mut *conn)
+            .await?;
+            let (account_id, identifier, platform) = account.ok_or_else(|| {
+                AppError::invalid(
+                    "resolution",
+                    if system == "email" {
+                        "consignez d'abord l'adresse réelle (cPanel ou Microsoft 365), ou choisissez « Exception motivée »"
+                    } else {
+                        "consignez d'abord l'identifiant réellement ouvert, ou choisissez « Exception motivée »"
+                    },
+                )
+            })?;
+            Ok((TaskResolution::Realise, json!({ "account_id": account_id, "identifiant": identifier, "plateforme": platform })))
+        }
+        (Evidence::None, TaskResolution::Realise) => Ok((TaskResolution::Realise, json!({}))),
+        (_, other) => Err(AppError::invalid(
+            "resolution",
+            format!("« {} » ne s'applique pas à cette tâche", other.label()),
+        )),
+    }
 }
 
 #[derive(Deserialize)]

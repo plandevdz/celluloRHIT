@@ -21,6 +21,7 @@ type CaseItem = {
 export default function HomePage() {
   const onb = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=ONB&status=ouvert"), []);
   const dem = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=DEM&status=ouvert"), []);
+  const toCheck = useLoad(() => api<any[]>("/employees/arrivals-to-check"), []);
   const arrivals = onb.data?.items ?? [];
   const requests = dem.data?.items ?? [];
   const unowned = [...arrivals, ...requests].reduce((n, c) => n + c.unowned_tasks, 0);
@@ -57,6 +58,33 @@ export default function HomePage() {
       </div>
 
       <div className="stack">
+        {(toCheck.data?.length ?? 0) > 0 && (
+          <Section title={`Présence à confirmer (${toCheck.data!.length})`}>
+            <p className="small muted">
+              Date prévue passée ou dossier d'arrivée clos, mais présence non confirmée : ces personnes ne sont pas comptées
+              actives. Ouvrez la fiche pour confirmer la date réelle.
+            </p>
+            <table>
+              <tbody>
+                {toCheck.data!.map((e) => (
+                  <tr key={e.id}>
+                    <td>
+                      <Link to={`/personnel/${e.id}`}>
+                        {e.first_name} {e.last_name}
+                      </Link>
+                    </td>
+                    <td>{e.site_name ?? "—"}</td>
+                    <td>prévue le {fmtDate(e.planned_arrival)}</td>
+                    <td>
+                      {e.onb_reference && <Link to={`/dossiers/${e.onb_reference}`}>{e.onb_reference}</Link>}
+                      {e.onb_closed && <span className="small muted"> (clos)</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </Section>
+        )}
         <Section title="Arrivées prévues">
           <ErrorBox error={onb.error} onRetry={onb.reload} />
           {onb.loading && !onb.data ? <Loading /> : <CaseTable items={arrivals} empty="Aucune arrivée en cours." />}

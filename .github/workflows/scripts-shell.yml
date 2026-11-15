@@ -1,0 +1,35 @@
+# Tests des scripts de sauvegarde et de restauration sur Linux, depuis un
+# checkout neuf. Données FICTIVES uniquement (générées par les tests) ;
+# aucun secret, aucun déploiement, aucun accès à un serveur.
+name: Scripts shell (Linux)
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  scripts:
+    name: Sauvegarde et restauration (ubuntu-latest)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout neuf
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Environnement (fins de ligne et outils)
+        run: |
+          git ls-files --eol -- '*.sh'
+          bash --version | head -1
+          gpg --version | head -1
+          openssl version
+
+      - name: test-backup.sh (chiffrement des sauvegardes)
+        run: ./deploy/tests/test-backup.sh
+
+      - name: test-restore.sh (restauration isolée)
+        run: ./deploy/tests/test-restore.sh

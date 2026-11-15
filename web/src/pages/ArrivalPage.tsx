@@ -4,7 +4,7 @@ import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
 import { ErrorBox, Field, Notice, PageHeader } from "../components";
 import { useLoad, useUnsavedWarning } from "../hooks";
-import { employeeStatusLabel, fmtDate, roleLabel } from "../labels";
+import { employeeStatusLabel, fmtDate, roleLabel, visibilityText } from "../labels";
 import { emptyNeeds, NeedsEditor, needsPayload, recipients, TrainingValue } from "./NeedsEditor";
 
 type Site = { id: string; name: string; active: boolean };
@@ -21,6 +21,14 @@ type Candidate = {
 
 const EMPTY = { first_name: "", last_name: "", job_title: "", site_id: "", planned_arrival: "" };
 
+type ArrivalResult = {
+  reference: string;
+  visible_to: string[];
+  teams_without_recipient: string[];
+  mail_mode: string;
+  tasks_created: number;
+};
+
 /** M01 / U1 : cinq champs, un bouton, avis immédiat aux équipes. */
 export default function ArrivalPage() {
   const { has } = useAuth();
@@ -34,7 +42,9 @@ export default function ArrivalPage() {
   const [key, setKey] = useState(newKey);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
-  const [result, setResult] = useState<{ reference: string; notified_roles: string[]; tasks_created: number } | null>(null);
+  const [result, setResult] = useState<ArrivalResult | null>(null);
+  const health = useLoad(() => api<{ mail_mode: string }>("/health"), []);
+  const mailMode = health.data?.mail_mode ?? "journal";
 
   const dirty = !result && Object.values(form).some((v) => v !== "");
   useUnsavedWarning(dirty);
@@ -72,7 +82,7 @@ export default function ArrivalPage() {
     setBusy(true);
     setError(null);
     try {
-      const res = await api<{ reference: string; notified_roles: string[]; tasks_created: number }>("/arrivals", {
+      const res = await api<ArrivalResult>("/arrivals", {
         idempotencyKey: key,
         body: {
           ...form,
@@ -112,13 +122,16 @@ export default function ArrivalPage() {
         <div className="success-panel">
           <div className="ref">{result.reference} créé</div>
           <p>
-            Équipes prévenues : <strong>{result.notified_roles.map((r) => roleLabel[r]).join(", ")}</strong>.{" "}
+            <strong>{visibilityText(result.visible_to, result.mail_mode)}</strong>.{" "}
             {result.tasks_created > 0 ? `${result.tasks_created} action(s) créée(s).` : "Aucune action précise : annonce seule."}
           </p>
-          <p className="small">
-            Notifications : en file d'envoi (suivi dans le dossier). Le dossier est déjà visible dans « Mon travail » des
-            équipes.
-          </p>
+          <p className="small">Les équipes le trouvent dans « Mon travail » et « Arrivées annoncées ».</p>
+          {result.teams_without_recipient.length > 0 && (
+            <Notice kind="warn">
+              Aucun utilisateur actif pour : <strong>{result.teams_without_recipient.map((r) => roleLabel[r]).join(", ")}</strong>.
+              Le dossier est créé, mais personne ne peut encore traiter ces actions — prévenez l'administrateur.
+            </Notice>
+          )}
           <div className="row">
             <Link className="btn btn-primary" to={`/dossiers/${result.reference}`}>
               Ouvrir le dossier
@@ -216,7 +229,7 @@ export default function ArrivalPage() {
         <ErrorBox error={error} />
         <div className="card row" style={{ justifyContent: "space-between" }}>
           <span>
-            Seront prévenus immédiatement : <strong>{recipients(needs, trainings).join(", ")}</strong>
+            <strong>{visibilityText(recipients(needs, trainings), mailMode)}</strong>
             {form.planned_arrival && <span className="muted"> — arrivée le {fmtDate(form.planned_arrival)}</span>}
           </span>
           <button className="btn btn-primary" type="submit" disabled={busy}>

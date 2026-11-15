@@ -40,13 +40,14 @@ export default function HandoverPage() {
   const scanRef = useRef<HTMLInputElement>(null);
   useUnsavedWarning(lines.length > 0 && !result);
 
-  const pcNeed = caseInfo.data?.needs?.find((n: any) => n.category === "pc");
-  const preference: string | null = taskId ? pcNeed?.preference ?? null : null;
-  const pcKind = lines.find((l) => l.type === "asset" && l.kind.startsWith("pc_")) as Extract<Line, { type: "asset" }> | undefined;
-  const mismatch = useMemo(
-    () => !!pcKind && ((preference === "fixe" && pcKind.kind === "pc_portable") || (preference === "portable" && pcKind.kind === "pc_fixe")),
-    [preference, pcKind],
-  );
+  // La préférence PC du dossier vaut pour toute remise du dossier ; toutes
+  // les lignes sont examinées, quel que soit leur ordre.
+  const pcNeed = caseInfo.data?.needs?.find((n: any) => n.category === "pc" && n.answer === "oui");
+  const preference: string | null = pcNeed?.preference ?? null;
+  const mismatch = useMemo(() => {
+    const opposite = preference === "fixe" ? "pc_portable" : preference === "portable" ? "pc_fixe" : null;
+    return !!opposite && lines.some((l) => l.type === "asset" && l.kind === opposite);
+  }, [preference, lines]);
 
   if (!has("IT", "ADMIN")) return <Notice kind="danger">Réservé à l'IT.</Notice>;
   if (!employeeId) return <Notice kind="warn">Ouvrez la remise depuis la fiche salarié ou depuis la tâche du dossier.</Notice>;

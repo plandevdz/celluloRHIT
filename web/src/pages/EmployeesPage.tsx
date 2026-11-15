@@ -34,6 +34,12 @@ export default function EmployeesPage() {
         actions={
           has("RH", "ADMIN") && (
             <>
+              <a className="btn" href={`/api/v1/personnel/export.xlsx${status ? `?status=${status}` : ""}`}>
+                Exporter (Excel)
+              </a>
+              <Link className="btn" to="/personnel/import">
+                Importer (Excel)
+              </Link>
               <button className="btn" onClick={() => setCreating(true)}>
                 Nouvelle fiche (sans parcours)
               </button>

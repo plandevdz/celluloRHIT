@@ -85,6 +85,60 @@ impl NeedCategory {
     }
 }
 
+/// Famille de preuve attendue pour solder la tâche d'un besoin.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Evidence {
+    /// Matériel : ligne de remise ou affectation active de la bonne catégorie.
+    Equipment,
+    /// Compte réellement consigné par l'IT dans le système concerné.
+    Account,
+    /// Travail sans preuve matérielle (carte, véhicule géré par le RH…).
+    None,
+}
+
+impl NeedCategory {
+    pub fn evidence(self) -> Evidence {
+        match self {
+            NeedCategory::Pc | NeedCategory::Telephone | NeedCategory::Sim => Evidence::Equipment,
+            NeedCategory::EmailPro | NeedCategory::Xena | NeedCategory::Intelix => Evidence::Account,
+            _ => Evidence::None,
+        }
+    }
+
+    /// Une ligne de mouvement (type, et type d'actif s'il y en a un)
+    /// prouve-t-elle ce besoin ? Une SIM ne prouve pas un PC.
+    pub fn matches_item(self, item_type: &str, asset_kind: Option<&str>) -> bool {
+        match self {
+            NeedCategory::Pc => item_type == "asset" && matches!(asset_kind, Some("pc_portable") | Some("pc_fixe")),
+            NeedCategory::Telephone => item_type == "asset" && asset_kind == Some("telephone"),
+            NeedCategory::Sim => item_type == "sim",
+            _ => false,
+        }
+    }
+
+    /// Système de compte attendu pour un besoin d'accès.
+    pub fn account_system(self) -> Option<&'static str> {
+        match self {
+            NeedCategory::EmailPro => Some("email"),
+            NeedCategory::Xena => Some("xena"),
+            NeedCategory::Intelix => Some("intelix"),
+            _ => None,
+        }
+    }
+}
+
+/// Faut-il un motif de substitution ? On examine **toutes** les lignes
+/// remises, quel que soit leur ordre : un PC de l'autre forme que celle
+/// préférée par le RH impose un motif.
+pub fn substitution_needed(preference: Option<PcPreference>, asset_kinds: &[&str]) -> bool {
+    let opposite = match preference {
+        Some(PcPreference::Fixe) => "pc_portable",
+        Some(PcPreference::Portable) => "pc_fixe",
+        _ => return false,
+    };
+    asset_kinds.iter().any(|k| *k == opposite)
+}
+
 /// Spécification d'une tâche à créer, indépendante du stockage.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TaskSpec {
@@ -196,6 +250,27 @@ mod tests {
         assert_eq!(roles_to_notify_on_arrival(&[]), vec![Role::It, Role::Formation]);
         let roles = roles_to_notify_on_arrival(&[need(NeedCategory::CarteVisite, NeedAnswer::Oui)]);
         assert_eq!(roles, vec![Role::It, Role::Formation, Role::Graphiste]);
+    }
+
+    #[test]
+    fn une_sim_ne_prouve_pas_un_pc() {
+        assert!(!NeedCategory::Pc.matches_item("sim", None));
+        assert!(!NeedCategory::Pc.matches_item("asset", Some("telephone")));
+        assert!(NeedCategory::Pc.matches_item("asset", Some("pc_portable")));
+        assert!(NeedCategory::Telephone.matches_item("asset", Some("telephone")));
+        assert!(NeedCategory::Sim.matches_item("sim", None));
+        assert!(!NeedCategory::Sim.matches_item("accessoire", None));
+    }
+
+    #[test]
+    fn substitution_quel_que_soit_l_ordre() {
+        let fixe = Some(PcPreference::Fixe);
+        assert!(substitution_needed(fixe, &["telephone", "pc_portable"]));
+        assert!(substitution_needed(fixe, &["pc_portable", "telephone"]));
+        assert!(!substitution_needed(fixe, &["telephone", "pc_fixe"]));
+        assert!(!substitution_needed(Some(PcPreference::SansPreference), &["pc_portable"]));
+        assert!(!substitution_needed(None, &["pc_portable"]));
+        assert!(substitution_needed(Some(PcPreference::Portable), &["ecran", "pc_fixe"]));
     }
 
     #[test]

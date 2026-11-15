@@ -43,6 +43,7 @@ pub async fn holdings_json(conn: &mut PgConnection, employee_id: Uuid) -> AppRes
     let v: Value = sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
                     'assignment_id', a.id, 'origin_line_id', a.handover_line_id, 'item_type', a.item_type,
+                    'asset_kind', (SELECT kind FROM assets WHERE id = a.asset_id),
                     'label', ml.label, 'identifier', ml.identifier, 'quantity', a.quantity,
                     'open_quantity', a.open_quantity, 'since', a.started_at,
                     'origin_reference', m.reference, 'case_reference', c.reference)
@@ -215,17 +216,25 @@ async fn create_handover(
         }
     }
     if let Some(task_id) = input.task_id {
-        let row: Option<(Uuid, Option<String>)> = sqlx::query_as(
-            "SELECT t.case_id, n.preference FROM tasks t LEFT JOIN case_needs n ON n.id = t.need_id WHERE t.id = $1",
-        )
-        .bind(task_id)
-        .fetch_optional(&mut *tx)
-        .await?;
-        let (task_case, pref) = row.ok_or_else(|| AppError::invalid("task_id", "tâche introuvable"))?;
+        let task_case: Option<Uuid> = sqlx::query_scalar("SELECT case_id FROM tasks WHERE id = $1")
+            .bind(task_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+        let task_case = task_case.ok_or_else(|| AppError::invalid("task_id", "tâche introuvable"))?;
         if Some(task_case) != input.case_id {
             return Err(AppError::invalid("task_id", "la tâche n'appartient pas à ce dossier"));
         }
-        preference = pref;
+    }
+    // La préférence de PC exprimée par le RH dans ce dossier s'applique à
+    // toute remise du dossier, quelle que soit la tâche d'où l'on vient.
+    if let Some(case_id) = input.case_id {
+        preference = sqlx::query_scalar(
+            "SELECT preference FROM case_needs WHERE case_id = $1 AND category = 'pc' AND answer = 'oui'",
+        )
+        .bind(case_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .flatten();
     }
 
     struct Prepared {
@@ -345,18 +354,16 @@ async fn create_handover(
 
     // Substitution : la préférence RH reste intacte, la raison est tracée.
     let substitution = input.substitution_reason.as_deref().and_then(domain::text::clean);
-    if let Some(pref) = preference.as_deref() {
-        let delivered_kind = prepared.iter().find_map(|p| p.asset_kind.clone());
-        let mismatch = matches!(
-            (pref, delivered_kind.as_deref()),
-            ("fixe", Some("pc_portable")) | ("portable", Some("pc_fixe"))
-        );
-        if mismatch && substitution.is_none() {
-            return Err(AppError::invalid(
-                "substitution_reason",
-                format!("préférence RH « {pref} » : indiquez la raison de la substitution"),
-            ));
-        }
+    let kinds: Vec<&str> = prepared.iter().filter_map(|p| p.asset_kind.as_deref()).collect();
+    let pref = preference.as_deref().and_then(domain::PcPreference::parse);
+    if domain::needs::substitution_needed(pref, &kinds) && substitution.is_none() {
+        return Err(AppError::invalid(
+            "substitution_reason",
+            format!(
+                "préférence RH « {} » : indiquez la raison de la substitution",
+                preference.as_deref().unwrap_or_default()
+            ),
+        ));
     }
 
     let effective_at = input.effective_at.unwrap_or_else(Utc::now);
