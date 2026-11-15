@@ -171,7 +171,7 @@ async fn sessions(State(state): State<AppState>, user: CurrentUser, Query(q): Qu
            FROM training_sessions s
            JOIN training_catalog tc ON tc.id = s.catalog_id
            JOIN employees e ON e.id = s.employee_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites si ON si.id = p.site_id
            LEFT JOIN users u ON u.id = s.trainer_id
            LEFT JOIN cases c ON c.id = s.case_id

@@ -23,6 +23,7 @@ import {
 import { CompleteTaskDialog, ConfirmArrivalDialog } from "./TaskDialogs";
 import { DocumentActions } from "./DocumentActions";
 import { emptyNeeds, NeedsEditor, needsPayload, NeedValue, TrainingValue } from "./NeedsEditor";
+import { DeparturePanel, TransferPanel } from "./TransitionPanels";
 
 type CaseDetail = {
   case: any;
@@ -33,6 +34,8 @@ type CaseDetail = {
   children: any[];
   history: any[];
   notifications: any[];
+  transfer: any | null;
+  departure: any | null;
   scope: "complet" | "equipe";
   mail_mode: string;
 };
@@ -91,9 +94,11 @@ export default function CasePage() {
             )}
             {isHr && isOpen && (
               <>
-                <button className="btn" onClick={() => setDialog({ kind: "needs" })}>
-                  Compléter la demande
-                </button>
+                {["ONB", "DEM"].includes(c.kind) && (
+                  <button className="btn" onClick={() => setDialog({ kind: "needs" })}>
+                    Compléter la demande
+                  </button>
+                )}
                 <button className="btn" onClick={() => setDialog({ kind: "close" })}>
                   Clôturer
                 </button>
@@ -107,6 +112,16 @@ export default function CasePage() {
       {c.close_note && <Notice kind="info">Clôture : {c.close_note}</Notice>}
       {scope === "equipe" && (
         <p className="small muted">Vue limitée aux éléments utiles à votre équipe.</p>
+      )}
+      {detail.data.transfer && (
+        <div style={{ marginBottom: "1rem" }}>
+          <TransferPanel t={detail.data.transfer} onChange={detail.reload} />
+        </div>
+      )}
+      {detail.data.departure && (
+        <div style={{ marginBottom: "1rem" }}>
+          <DeparturePanel c={c} d={detail.data.departure} onChange={detail.reload} />
+        </div>
       )}
 
       <div className="grid-2">
@@ -222,8 +237,14 @@ export default function CasePage() {
                         <td>
                           <strong>{t.title}</strong>
                           <div className="small muted">
-                            {roleLabel[t.role]} · échéance {fmtDate(t.due_date)}
+                            {roleLabel[t.role]} · échéance {t.due_at ? fmtDateTime(t.due_at) : fmtDate(t.due_date)}
                           </div>
+                          {t.not_before && t.status !== "termine" && t.status !== "annule" && (
+                            <div className="small">
+                              {new Date(t.not_before) > new Date() ? `Exigible à partir du ${fmtDateTime(t.not_before)}` : "Exigible maintenant"}
+                              {t.escalated_at && <span style={{ color: "var(--danger)" }}> · relancée : accès à vérifier</span>}
+                            </div>
+                          )}
                           {t.blocked_reason && t.status === "bloque" && <div className="small">En attente : {t.blocked_reason}</div>}
                           {t.done_note && <div className="small">Observation : {t.done_note}</div>}
                         </td>
@@ -259,11 +280,12 @@ export default function CasePage() {
                           {mine && t.status === "en_cours" && (
                             <div className="row">
                               <TaskShortcut task={t} c={c} />
-                              {t.need_category !== null && (
+                              {!t.training_session_id && !t.exit_control_id && (
                                 <button className="btn btn-small" onClick={() => setDialog({ kind: "complete", task: t })}>
                                   Terminer
                                 </button>
                               )}
+                              {t.exit_control_id && <span className="small muted">À confirmer dans le panneau Départ</span>}
                               <button className="btn btn-small" onClick={() => setDialog({ kind: "block", task: t })}>
                                 Mettre en attente
                               </button>
@@ -412,7 +434,15 @@ function TaskShortcut({ task, c }: { task: any; c: any }) {
       </Link>
     );
   }
-  if (task.need_category === null) {
+  if (task.need_category === "vehicule") {
+    const v = new URLSearchParams({ salarie: c.employee_id, nom: `${c.first_name} ${c.last_name}`, dossier: c.id, tache: task.id });
+    return (
+      <Link className="btn btn-primary btn-small" to={`/vehicules?${v}`}>
+        Remettre un véhicule
+      </Link>
+    );
+  }
+  if (task.training_session_id) {
     return (
       <Link className="btn btn-primary btn-small" to="/formations">
         Gérer la session

@@ -26,6 +26,11 @@ export type Task = {
   site_name: string | null;
   need_category: string | null;
   need_preference: string | null;
+  not_before?: string | null;
+  due_at?: string | null;
+  escalated_at?: string | null;
+  exit_control_id?: string | null;
+  transfer_delta_id?: string | null;
 };
 
 /** « Mon travail » : toutes les files de mes habilitations, filtrables. */
@@ -136,7 +141,13 @@ export default function WorkPage() {
                       {t.title}
                       {t.need_preference && <div className="small muted">Demandé : {preferenceLabel[t.need_preference]}</div>}
                     </td>
-                    <td className="nowrap">{fmtDate(t.due_date)}</td>
+                    <td className="nowrap">
+                      {t.due_at ? fmtDateTime(t.due_at) : fmtDate(t.due_date)}
+                      {t.not_before && t.status !== "termine" && (
+                        <div className="small">{new Date(t.not_before) > new Date() ? "exigible plus tard" : <strong>exigible maintenant</strong>}</div>
+                      )}
+                      {t.escalated_at && <div className="small" style={{ color: "var(--danger)" }}>accès à vérifier</div>}
+                    </td>
                     <td>
                       <Badge status={t.status} label={taskStatusLabel[t.status]} />
                       {t.owner_name && <div className="small">{t.owner_name}</div>}

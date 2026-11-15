@@ -93,7 +93,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
            FROM tasks t
            JOIN cases c ON c.id = t.case_id
            JOIN employees e ON e.id = c.employee_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
            LEFT JOIN users o ON o.id = t.owner_id
            LEFT JOIN case_needs n ON n.id = t.need_id

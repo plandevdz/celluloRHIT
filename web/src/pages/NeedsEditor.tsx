@@ -8,6 +8,8 @@ export type NeedValue = {
   preference?: string | null;
   quantity?: number | null;
   detail?: string | null;
+  /** « profil » : valeur suggérée par le profil de poste, non retouchée. */
+  origin?: string | null;
 };
 
 export type TrainingValue = { catalog_id: string; trainer_id?: string | null };
@@ -34,7 +36,8 @@ export function NeedsEditor({
 }) {
   const catalog = useLoad(() => api<{ id: string; name: string; active: boolean }[]>("/trainings/catalog"), []);
   const trainers = useLoad(() => api<{ id: string; display_name: string }[]>("/users/directory?role=FORMATION"), []);
-  const set = (c: string, patch: Partial<NeedValue>) => onChange({ ...needs, [c]: { ...needs[c], ...patch } });
+  // Toute retouche par le RH fait de la valeur une saisie RH.
+  const set = (c: string, patch: Partial<NeedValue>) => onChange({ ...needs, [c]: { ...needs[c], ...patch, origin: null } });
 
   return (
     <div>
@@ -55,6 +58,7 @@ export function NeedsEditor({
                 <tr key={c}>
                   <td>
                     <strong>{needLabel[c]}</strong>
+                    {n.origin === "profil" && <div className="small muted">suggéré par le profil</div>}
                   </td>
                   <td className="small muted">{roleLabel[needTeam[c]]}</td>
                   <td>
@@ -164,5 +168,6 @@ export function needsPayload(needs: Record<string, NeedValue>): NeedValue[] {
     preference: n.category === "pc" ? n.preference || null : null,
     quantity: n.quantity || null,
     detail: n.detail?.trim() || null,
+    origin: n.origin ?? null,
   }));
 }

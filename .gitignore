@@ -6,3 +6,6 @@
 .env
 .playwright-mcp/
 *.log
+# Exports SharePoint locaux (adresse du site, identifiants internes) : jamais dans le dépôt
+Schema-Listes.*
+prompt.md

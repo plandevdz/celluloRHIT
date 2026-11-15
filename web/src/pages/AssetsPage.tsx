@@ -3,12 +3,15 @@ import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Section } from "../components";
 import { useCommand, useLoad } from "../hooks";
-import { assetKindLabel, assetStatusLabel } from "../labels";
+import { assetConditionLabel, assetKindLabel, assetStatusLabel } from "../labels";
+import { InventoriesTab, LabelsDialog, LinesSection, SoftwareTab } from "./ParcExtras";
 
 const TABS = [
   { id: "actifs", label: "Actifs" },
   { id: "accessoires", label: "Accessoires" },
   { id: "sim", label: "SIM et lignes" },
+  { id: "logiciels", label: "Logiciels et sièges" },
+  { id: "inventaires", label: "Inventaires QR" },
 ];
 
 export default function AssetsPage() {
@@ -16,7 +19,7 @@ export default function AssetsPage() {
   const tab = params.get("onglet") ?? "actifs";
   return (
     <>
-      <PageHeader title="Parc IT" subtitle="Disponibles, remis, en contrôle ; accessoires en stock ; SIM et lignes." />
+      <PageHeader title="Parc IT" subtitle="Disponibles, remis, en contrôle ; accessoires ; SIM et lignes ; logiciels ; inventaires." />
       <div className="row" role="tablist" style={{ marginBottom: "1rem" }}>
         {TABS.map((t) => (
           <button
@@ -33,6 +36,8 @@ export default function AssetsPage() {
       {tab === "actifs" && <AssetsTab />}
       {tab === "accessoires" && <AccessoriesTab />}
       {tab === "sim" && <SimsTab />}
+      {tab === "logiciels" && <SoftwareTab />}
+      {tab === "inventaires" && <InventoriesTab />}
     </>
   );
 }
@@ -50,6 +55,8 @@ function AssetsTab() {
   const [scan, setScan] = useState("");
   const [scanError, setScanError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [printing, setPrinting] = useState(false);
 
   const onScan = async (e: FormEvent) => {
     e.preventDefault();
@@ -73,7 +80,14 @@ function AssetsTab() {
         </form>
         {scanError && <div className="alert alert-danger">{scanError}</div>}
       </Section>
-      <Section title={`Actifs (${list.data?.length ?? 0})`}>
+      <Section
+        title={`Actifs (${list.data?.length ?? 0})`}
+        actions={
+          <button className="btn" disabled={selected.length === 0} onClick={() => setPrinting(true)}>
+            Imprimer les étiquettes ({selected.length})
+          </button>
+        }
+      >
         <form
           className="filters"
           onSubmit={(e) => {
@@ -121,6 +135,14 @@ function AssetsTab() {
             <table>
               <thead>
                 <tr>
+                  <th>
+                    <input
+                      type="checkbox"
+                      aria-label="Tout sélectionner"
+                      checked={!!list.data?.length && selected.length === list.data.length}
+                      onChange={(e) => setSelected(e.target.checked ? list.data!.map((a) => a.id) : [])}
+                    />
+                  </th>
                   <th>Inventaire</th>
                   <th>Libellé</th>
                   <th>Type</th>
@@ -133,10 +155,21 @@ function AssetsTab() {
               <tbody>
                 {list.data?.map((a) => (
                   <tr key={a.id}>
+                    <td>
+                      <input
+                        type="checkbox"
+                        aria-label={`Sélectionner ${a.inventory_no}`}
+                        checked={selected.includes(a.id)}
+                        onChange={(e) => setSelected(e.target.checked ? [...selected, a.id] : selected.filter((x) => x !== a.id))}
+                      />
+                    </td>
                     <td className="mono">
                       <Link to={`/parc/actifs/${a.id}`}>{a.inventory_no}</Link>
                     </td>
-                    <td>{a.label}</td>
+                    <td>
+                      {a.label}
+                      {(a.brand || a.model) && <div className="small muted">{[a.brand, a.model].filter(Boolean).join(" ")}</div>}
+                    </td>
                     <td>{assetKindLabel[a.kind]}</td>
                     <td className="mono small">{a.serial_no ?? "—"}</td>
                     <td>
@@ -155,20 +188,36 @@ function AssetsTab() {
         )}
       </Section>
       {creating && <CreateAssetDialog onClose={() => setCreating(false)} onCreated={(id) => navigate(`/parc/actifs/${id}`)} />}
+      {printing && (
+        <LabelsDialog
+          assets={(list.data ?? []).filter((a) => selected.includes(a.id)).map((a) => ({ id: a.id, inventory_no: a.inventory_no }))}
+          onClose={() => setPrinting(false)}
+        />
+      )}
     </div>
   );
 }
 
 function CreateAssetDialog({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
   const sites = useLoad(() => api<any[]>("/sites"), []);
-  const [f, setF] = useState({ inventory_no: "", kind: "pc_portable", label: "", serial_no: "", site_id: "", location_id: "", notes: "" });
+  const [f, setF] = useState({
+    inventory_no: "", kind: "pc_portable", label: "", serial_no: "", site_id: "", location_id: "", notes: "",
+    brand: "", model: "", intune_name: "", purchase_date: "", warranty_end: "", condition: "neuf",
+  });
+  const [inService, setInService] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const site = sites.data?.find((s) => s.id === f.site_id);
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     try {
       const r = await api<{ id: string }>("/assets", {
-        body: { ...f, serial_no: f.serial_no || null, site_id: f.site_id || null, location_id: f.location_id || null, notes: f.notes || null },
+        body: {
+          ...Object.fromEntries(Object.entries(f).map(([k, v]) => [k, v === "" ? null : v])),
+          inventory_no: f.inventory_no,
+          kind: f.kind,
+          label: f.label,
+          in_service: inService,
+        },
       });
       onCreated(r.id);
     } catch (err) {
@@ -196,9 +245,39 @@ function CreateAssetDialog({ onClose, onCreated }: { onClose: () => void; onCrea
         <Field label="Libellé" required>
           <input {...bind("label")} required placeholder="Portable Dell Latitude 5440" />
         </Field>
-        <Field label="N° de série">
-          <input {...bind("serial_no")} />
-        </Field>
+        <div className="form-grid">
+          <Field label="Marque">
+            <input {...bind("brand")} />
+          </Field>
+          <Field label="Modèle">
+            <input {...bind("model")} />
+          </Field>
+          <Field label="N° de série">
+            <input {...bind("serial_no")} />
+          </Field>
+          <Field label="Nom Intune">
+            <input {...bind("intune_name")} />
+          </Field>
+          <Field label="Date d'achat">
+            <input type="date" {...bind("purchase_date")} />
+          </Field>
+          <Field label="Fin de garantie">
+            <input type="date" {...bind("warranty_end")} />
+          </Field>
+          <Field label="État matériel">
+            <select {...bind("condition")}>
+              {Object.entries(assetConditionLabel).map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <label className="inline-choice" style={{ marginBottom: ".8rem" }}>
+          <input type="checkbox" checked={inService} onChange={(e) => setInService(e.target.checked)} /> Matériel partagé mis en service
+          (serveur, imprimante, réseau…), non remis à une personne
+        </label>
         <div className="form-grid">
           <Field label="Site">
             <select {...bind("site_id")}>
@@ -359,14 +438,27 @@ function AdjustDialog({ item, onClose, onDone }: { item: { id: string; label: st
 }
 
 function SimsTab() {
+  return (
+    <div className="stack">
+      <SimsBlock />
+      <LinesSection />
+    </div>
+  );
+}
+
+function SimsBlock() {
   const list = useLoad(() => api<any[]>("/sims"), []);
-  const [f, setF] = useState({ iccid: "", line_number: "", operator: "" });
+  const [f, setF] = useState({ iccid: "", line_number: "", operator: "", plan: "", line_type: "" });
   const cmd = useCommand();
   const create = async (e: FormEvent) => {
     e.preventDefault();
-    const r = await cmd.run(() => api("/sims", { body: { iccid: f.iccid, line_number: f.line_number || null, operator: f.operator || null } }));
+    const r = await cmd.run(() =>
+      api("/sims", {
+        body: { iccid: f.iccid, line_number: f.line_number || null, operator: f.operator || null, plan: f.plan || null, line_type: f.line_type || null },
+      }),
+    );
     if (r) {
-      setF({ iccid: "", line_number: "", operator: "" });
+      setF({ iccid: "", line_number: "", operator: "", plan: "", line_type: "" });
       list.reload();
     }
   };
@@ -413,7 +505,23 @@ function SimsTab() {
               <input value={f.line_number} onChange={(e) => setF({ ...f, line_number: e.target.value })} />
             </Field>
             <Field label="Opérateur">
-              <input value={f.operator} onChange={(e) => setF({ ...f, operator: e.target.value })} />
+              <select value={f.operator} onChange={(e) => setF({ ...f, operator: e.target.value })}>
+                <option value="">—</option>
+                <option>Mobilis</option>
+                <option>Djezzy</option>
+                <option>Ooredoo</option>
+              </select>
+            </Field>
+            <Field label="Forfait">
+              <input value={f.plan} onChange={(e) => setF({ ...f, plan: e.target.value })} />
+            </Field>
+            <Field label="Type de ligne">
+              <select value={f.line_type} onChange={(e) => setF({ ...f, line_type: e.target.value })}>
+                <option value="">—</option>
+                <option value="voix">Voix</option>
+                <option value="data">Data</option>
+                <option value="voix_data">Voix + Data</option>
+              </select>
             </Field>
           </div>
           <ErrorBox error={cmd.error} />

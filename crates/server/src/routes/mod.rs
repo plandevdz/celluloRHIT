@@ -8,6 +8,7 @@ pub mod imports;
 pub mod inventory;
 pub mod movements;
 pub mod referentials;
+pub mod reports;
 pub mod reprise;
 pub mod software;
 pub mod tasks;
@@ -79,6 +80,7 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .merge(inventory::routes())
         .merge(transfers::routes())
         .merge(departures::routes())
+        .merge(reports::routes())
         .fallback(not_found)
         .layer(middleware::from_fn(require_client_header))
 }

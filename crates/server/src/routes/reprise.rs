@@ -1056,7 +1056,7 @@ async fn candidates_for(conn: &mut PgConnection, ids: &[Uuid]) -> AppResult<Vec<
     let rows: Vec<(Uuid, String, Option<String>, Option<String>, Option<String>, String)> = sqlx::query_as(
         "SELECT e.id, e.first_name || ' ' || e.last_name, e.matricule, p.job_title, s.name, e.status
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE e.id = ANY($1)",
     )
@@ -1851,8 +1851,13 @@ async fn apply_row(
     r: &PendingRow,
     batch: Uuid,
 ) -> AppResult<(&'static str, Uuid, Option<PersonData>)> {
-    let update = r.proposal == "mise_a_jour" || (r.proposal == "a_revoir" && r.decision_target.is_some());
-    let target = r.decision_target.or(r.target_id);
+    // Personnel : la fiche choisie est la cible (rattachement). Autres
+    // listes : la fiche choisie est le salarié lié (détenteur, titulaire).
+    let (update, target) = if list == List::Personnel {
+        (r.proposal == "mise_a_jour" || (r.proposal == "a_revoir" && r.decision_target.is_some()), r.decision_target.or(r.target_id))
+    } else {
+        (r.proposal == "mise_a_jour", r.target_id)
+    };
     let mut extra = None;
     let (result, entity_id): (&'static str, Uuid) = match list {
         List::Wilayas => {
@@ -2000,13 +2005,19 @@ async fn apply_row(
             (result, id)
         }
         List::MaterielIT => {
-            let d: AssetData = data(&r.resolved)?;
+            let mut d: AssetData = data(&r.resolved)?;
+            if d.holder_id.is_none() {
+                d.holder_id = r.decision_target;
+            }
             let id = apply_asset(conn, user, &d, target).await?;
             remember(conn, list, r, id, Some(format!("inv:{}", d.inventory_no)), batch).await?;
             (if target.is_some() { "mis_a_jour" } else { "cree" }, id)
         }
         List::LignesMobiles => {
-            let d: LineData = data(&r.resolved)?;
+            let mut d: LineData = data(&r.resolved)?;
+            if d.holder_id.is_none() {
+                d.holder_id = r.decision_target;
+            }
             let id = apply_line(conn, user, &d, target).await?;
             remember(conn, list, r, id, Some(format!("num:{}", d.number)), batch).await?;
             (if target.is_some() { "mis_a_jour" } else { "cree" }, id)
@@ -2049,7 +2060,10 @@ async fn apply_row(
             ("cree", id)
         }
         List::Vehicules => {
-            let d: VehicleData = data(&r.resolved)?;
+            let mut d: VehicleData = data(&r.resolved)?;
+            if d.holder_id.is_none() {
+                d.holder_id = r.decision_target;
+            }
             let id = crate::routes::vehicles::apply_vehicle_reprise(conn, user, &d, target).await?;
             remember(conn, list, r, id, Some(format!("immat:{}", crate::routes::vehicles::normalize_plate(&d.plate))), batch).await?;
             (if target.is_some() { "mis_a_jour" } else { "cree" }, id)

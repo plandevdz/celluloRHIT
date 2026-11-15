@@ -78,7 +78,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
                 p.job_title, s.name AS site_name,
                 (SELECT count(*) FROM cases c WHERE c.employee_id = e.id AND c.status = 'ouvert') AS open_cases
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE ($1::text IS NULL OR lower(e.first_name || ' ' || e.last_name) LIKE $1
                  OR lower(e.last_name || ' ' || e.first_name) LIKE $1 OR lower(coalesce(e.matricule, '')) LIKE $1)
@@ -96,7 +96,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
     .await?;
     let total: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
           WHERE ($1::text IS NULL OR lower(e.first_name || ' ' || e.last_name) LIKE $1
                  OR lower(e.last_name || ' ' || e.first_name) LIKE $1 OR lower(coalesce(e.matricule, '')) LIKE $1)
             AND ($2::text IS NULL OR e.status = $2)
@@ -139,7 +139,7 @@ async fn similar(State(state): State<AppState>, user: CurrentUser, Query(q): Que
         "SELECT e.id, e.matricule, e.first_name, e.last_name, e.status, p.job_title, s.name AS site_name,
                 ($2::text IS NOT NULL AND e.matricule_norm = $2) AS same_matricule
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE e.name_key = $1 OR ($2::text IS NOT NULL AND e.matricule_norm = $2)
           ORDER BY same_matricule DESC, e.last_name
@@ -303,7 +303,7 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
                 (SELECT coalesce(jsonb_agg(jsonb_build_object('id', w.id, 'code', w.code, 'name', w.name) ORDER BY w.code), '[]')
                    FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilayas
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
            LEFT JOIN users cu ON cu.id = e.arrival_confirmed_by
            LEFT JOIN employees me ON me.id = p.manager_employee_id
@@ -524,7 +524,7 @@ async fn arrivals_to_check(State(state): State<AppState>, user: CurrentUser) -> 
         "SELECT e.id, e.first_name, e.last_name, e.planned_arrival, s.name AS site_name,
                 c.reference AS onb_reference, coalesce(c.status = 'clos', false) AS onb_closed
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
            LEFT JOIN LATERAL (SELECT reference, status FROM cases
                                WHERE employee_id = e.id AND kind = 'ONB' ORDER BY created_at DESC LIMIT 1) c ON true

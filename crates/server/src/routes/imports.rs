@@ -84,7 +84,7 @@ async fn export(State(state): State<AppState>, user: CurrentUser, Query(q): Quer
         "SELECT e.id, e.matricule, e.first_name, e.last_name, p.job_title, s.name AS site_name,
                 coalesce(e.actual_arrival, e.planned_arrival) AS arrival, p.department
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE ($1::text IS NULL OR e.status = $1) AND ($2::uuid IS NULL OR p.site_id = $2)
           ORDER BY e.last_name, e.first_name",
@@ -172,7 +172,7 @@ struct Emp {
 const EMP_SELECT: &str = "SELECT e.id, e.matricule, e.matricule_norm, e.first_name, e.last_name, e.name_key, e.status, e.version,
             p.job_title, p.site_id, s.name AS site_name, p.department, e.actual_arrival, e.planned_arrival
        FROM employees e
-       LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+       LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
        LEFT JOIN sites s ON s.id = p.site_id";
 
 impl Emp {

@@ -591,7 +591,7 @@ async fn list_cases(State(state): State<AppState>, user: CurrentUser, Query(q): 
                 (SELECT count(*) FROM tasks t WHERE t.case_id = c.id AND t.status = 'a_faire') AS unowned_tasks
            FROM cases c
            JOIN employees e ON e.id = c.employee_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE ($1::text IS NULL OR c.kind = $1)
             AND ($2::text IS NULL OR c.status = $2)
@@ -650,7 +650,7 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
            JOIN employees e ON e.id = c.employee_id
            JOIN users u ON u.id = c.created_by
            LEFT JOIN cases pc ON pc.id = c.parent_case_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE c.reference = upper($1) OR c.id::text = $1",
     )
@@ -703,7 +703,10 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
                     'owner_id', t.owner_id, 'due_date', t.due_date, 'blocked_reason', t.blocked_reason,
                     'done_note', t.done_note, 'claimed_at', t.claimed_at, 'completed_at', t.completed_at,
                     'version', t.version, 'need_category', n.category,
-                    'resolution', t.resolution, 'resolution_evidence', t.resolution_evidence)
+                    'resolution', t.resolution, 'resolution_evidence', t.resolution_evidence,
+                    'training_session_id', t.training_session_id, 'exit_control_id', t.exit_control_id,
+                    'transfer_delta_id', t.transfer_delta_id, 'not_before', t.not_before, 'due_at', t.due_at,
+                    'escalated_at', t.escalated_at)
                     ORDER BY t.role, t.created_at), '[]')
            FROM tasks t LEFT JOIN users o ON o.id = t.owner_id LEFT JOIN case_needs n ON n.id = t.need_id
           WHERE t.case_id = $1 AND ($2 OR t.role = ANY($3) OR t.owner_id = $4)",

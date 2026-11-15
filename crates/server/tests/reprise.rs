@@ -166,6 +166,29 @@ async fn reprise_complete_des_listes(pool: PgPool) {
 }
 
 #[sqlx::test(migrator = "server::MIGRATOR")]
+async fn detenteur_rapproche_par_le_nom_sur_decision(pool: PgPool) {
+    let app = TestApp::new(pool).await;
+    let admin = app.user("Admin", &["ADMIN"]).await;
+    let rh = app.user("Rh", &["RH"]).await;
+    let site = app.site("ORAN").await;
+    let emp = app.announce(&rh, site, "Amel", "Terrain", json!({})).await["employee_id"].as_str().unwrap().to_string();
+    let (id, p) = preview(&app, &admin, "MaterielIT", "NumInventaire;Categorie;AttribueA
+PC-902;PC fixe;Amel Terrain
+").await;
+    assert_eq!(row(&p, 2)["proposal"], "a_revoir", "jamais de rapprochement automatique par le nom");
+    let (status, v) = app
+        .call(&admin, Method::POST, &format!("/reprise/batches/{id}/rows/2/decision"), Some(json!({ "decision": "appliquer", "target_id": emp })))
+        .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    let done = commit(&app, &admin, &id).await;
+    assert_eq!(row(&done, 2)["result"], "cree", "{done}");
+    assert_eq!(
+        app.count("SELECT count(*) FROM assignments g JOIN assets a ON a.id = g.asset_id WHERE a.inventory_no = 'PC-902' AND g.ended_at IS NULL").await,
+        1
+    );
+}
+
+#[sqlx::test(migrator = "server::MIGRATOR")]
 async fn colonnes_obligatoires_et_formules(pool: PgPool) {
     let app = TestApp::new(pool).await;
     let admin = app.user("Admin", &["ADMIN"]).await;

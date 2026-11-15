@@ -2,9 +2,9 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
-import { ErrorBox, Field, Notice, PageHeader } from "../components";
+import { EmployeePicker, ErrorBox, Field, Notice, PageHeader } from "../components";
 import { useLoad, useUnsavedWarning } from "../hooks";
-import { employeeStatusLabel, fmtDate, roleLabel, visibilityText } from "../labels";
+import { contractTypeLabel, DEPARTMENTS, employeeStatusLabel, fmtDate, roleLabel, visibilityText } from "../labels";
 import { emptyNeeds, NeedsEditor, needsPayload, recipients, TrainingValue } from "./NeedsEditor";
 
 type Site = { id: string; name: string; active: boolean };
@@ -34,7 +34,9 @@ export default function ArrivalPage() {
   const { has } = useAuth();
   const sites = useLoad(() => api<Site[]>("/sites"), []);
   const [form, setForm] = useState(EMPTY);
-  const [optional, setOptional] = useState({ matricule: "", department: "", manager: "", note: "" });
+  const [optional, setOptional] = useState({ matricule: "", department: "", manager: "", note: "", contract_type: "", job_profile_id: "" });
+  const [managerPick, setManagerPick] = useState<{ id: string; name: string } | null>(null);
+  const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
   const [needs, setNeeds] = useState(emptyNeeds);
   const [trainings, setTrainings] = useState<TrainingValue[]>([]);
   const [candidates, setCandidates] = useState<Candidate[]>([]);
@@ -89,7 +91,10 @@ export default function ArrivalPage() {
           employee_id: chosen && chosen !== "new" ? chosen : null,
           matricule: optional.matricule || null,
           department: optional.department || null,
-          manager: optional.manager || null,
+          manager: managerPick?.name ?? (optional.manager || null),
+          manager_employee_id: managerPick?.id ?? null,
+          contract_type: optional.contract_type || null,
+          job_profile_id: optional.job_profile_id || null,
           note: optional.note || null,
           needs: needsPayload(needs),
           trainings,
@@ -105,7 +110,8 @@ export default function ArrivalPage() {
 
   const reset = () => {
     setForm(EMPTY);
-    setOptional({ matricule: "", department: "", manager: "", note: "" });
+    setOptional({ matricule: "", department: "", manager: "", note: "", contract_type: "", job_profile_id: "" });
+    setManagerPick(null);
     setNeeds(emptyNeeds());
     setTrainings([]);
     setCandidates([]);
@@ -146,6 +152,20 @@ export default function ArrivalPage() {
   }
 
   const activeSites = sites.data?.filter((s) => s.active) ?? [];
+
+  // Profil : suggestions copiées dans le formulaire (vide = à préciser),
+  // librement modifiables ; le dossier garde la trace de leur origine.
+  const applyProfile = (id: string) => {
+    setOptional({ ...optional, job_profile_id: id, department: optional.department || profiles.data?.find((p) => p.id === id)?.department || "" });
+    const p = profiles.data?.find((x) => x.id === id);
+    if (!p) return;
+    const next = emptyNeeds();
+    for (const n of p.needs) {
+      next[n.category] = { category: n.category, answer: "oui", preference: n.preference, quantity: n.quantity, detail: n.detail, origin: "profil" };
+    }
+    setNeeds(next);
+    setTrainings(p.trainings.map((t: any) => ({ catalog_id: t.catalog_id })));
+  };
 
   return (
     <>
@@ -201,18 +221,41 @@ export default function ArrivalPage() {
           )}
 
           <details>
-            <summary>Informations facultatives (matricule, département, manager, note RH)</summary>
+            <summary>Informations facultatives (profil, matricule, contrat, département, manager, note RH)</summary>
             <div className="form-grid">
+              <Field label="Profil de poste" hint="Pré-remplit les besoins ; tout reste modifiable.">
+                <select value={optional.job_profile_id} onChange={(e) => applyProfile(e.target.value)}>
+                  <option value="">Aucun</option>
+                  {profiles.data?.filter((p) => p.active).map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Type de contrat">
+                <select value={optional.contract_type} onChange={(e) => setOptional({ ...optional, contract_type: e.target.value })}>
+                  <option value="">—</option>
+                  {Object.entries(contractTypeLabel).map(([k, l]) => (
+                    <option key={k} value={k}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <Field label="Matricule" hint="Peut être attribué plus tard." error={error?.detail?.field === "matricule" ? error.message : null}>
                 <input value={optional.matricule} onChange={(e) => setOptional({ ...optional, matricule: e.target.value })} />
               </Field>
               <Field label="Département">
-                <input value={optional.department} onChange={(e) => setOptional({ ...optional, department: e.target.value })} />
-              </Field>
-              <Field label="Manager">
-                <input value={optional.manager} onChange={(e) => setOptional({ ...optional, manager: e.target.value })} />
+                <input list="departements-arrivee" value={optional.department} onChange={(e) => setOptional({ ...optional, department: e.target.value })} />
+                <datalist id="departements-arrivee">
+                  {DEPARTMENTS.map((d) => (
+                    <option key={d} value={d} />
+                  ))}
+                </datalist>
               </Field>
             </div>
+            <EmployeePicker value={managerPick} onChange={setManagerPick} label="Manager (salarié de l'entreprise, facultatif)" />
             <Field label="Note RH (visible du RH uniquement)">
               <textarea rows={2} value={optional.note} onChange={(e) => setOptional({ ...optional, note: e.target.value })} />
             </Field>

@@ -5,6 +5,10 @@ import { loginErrorMessage, useAuth } from "./auth";
 import { Field, Loading, Modal, Notice } from "./components";
 import { Role, roleLabel } from "./labels";
 import AdminPage from "./pages/AdminPage";
+import { RepriseBatchPage } from "./pages/AdminExtras";
+import EtatsPage from "./pages/EtatsPage";
+import { InventoryPage, SoftwarePage } from "./pages/ParcExtras";
+import VehiclesPage, { VehiclePage } from "./pages/VehiclesPage";
 import ArrivalPage from "./pages/ArrivalPage";
 import AssetPage from "./pages/AssetPage";
 import AssetsPage from "./pages/AssetsPage";
@@ -28,7 +32,9 @@ const NAV: NavItem[] = [
   { to: "/dossiers", label: "Dossiers" },
   { to: "/personnel", label: "Personnel", roles: ["RH", "ADMIN", "IT"] },
   { to: "/parc", label: "Parc IT", roles: ["IT", "ADMIN"] },
+  { to: "/vehicules", label: "Véhicules", roles: ["RH", "ADMIN"] },
   { to: "/formations", label: "Formations", roles: ["FORMATION", "RH", "ADMIN"] },
+  { to: "/etats", label: "États", roles: ["RH", "ADMIN", "IT"] },
   { to: "/administration", label: "Administration", roles: ["ADMIN"] },
 ];
 
@@ -88,6 +94,12 @@ export default function App() {
           <Route path="/parc/actifs/:id" element={<AssetPage />} />
           <Route path="/parc/remise" element={<HandoverPage />} />
           <Route path="/parc/restitution" element={<ReturnPage />} />
+          <Route path="/parc/logiciels/:id" element={<SoftwarePage />} />
+          <Route path="/parc/inventaires/:id" element={<InventoryPage />} />
+          <Route path="/vehicules" element={<VehiclesPage />} />
+          <Route path="/vehicules/:id" element={<VehiclePage />} />
+          <Route path="/etats" element={<EtatsPage />} />
+          <Route path="/administration/reprise/:id" element={<RepriseBatchPage />} />
           <Route path="/formations" element={<TrainingsPage />} />
           <Route path="/administration" element={<AdminPage />} />
           <Route path="*" element={<NotFound />} />

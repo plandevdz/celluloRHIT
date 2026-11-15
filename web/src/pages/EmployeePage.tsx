@@ -2,11 +2,13 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHeader, Section } from "../components";
+import { Badge, EmployeePicker, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHeader, Section } from "../components";
 import { useCommand, useLoad } from "../hooks";
 import {
   caseKindLabel,
   caseStatusLabel,
+  contractTypeLabel,
+  DEPARTMENTS,
   employeeStatusLabel,
   fmtDate,
   fmtDateTime,
@@ -17,6 +19,7 @@ import {
   sessionStatusLabel,
 } from "../labels";
 import { ConfirmArrivalDialog } from "./TaskDialogs";
+import { DepartureDialog, PositionCorrectionDialog, TransferDialog } from "./TransitionPanels";
 
 export default function EmployeePage() {
   const { id = "" } = useParams();
@@ -24,7 +27,7 @@ export default function EmployeePage() {
   const location = useLocation();
   const detail = useLoad(() => api<any>(`/employees/${id}`), [id]);
   const accounts = useLoad(() => (has("IT", "RH", "ADMIN") ? api<any[]>(`/employees/${id}/accounts`) : Promise.resolve([])), [id]);
-  const [dialog, setDialog] = useState<null | "request" | "edit" | "arrival">(null);
+  const [dialog, setDialog] = useState<null | "request" | "edit" | "arrival" | "org" | "mutation" | "depart" | "correction">(null);
 
   useEffect(() => {
     if (location.hash === "#comptes" && accounts.data) document.getElementById("comptes")?.scrollIntoView();
@@ -32,7 +35,9 @@ export default function EmployeePage() {
 
   if (detail.loading && !detail.data) return <Loading />;
   if (detail.error) return <ErrorBox error={detail.error} onRetry={detail.reload} />;
-  const { employee: e, positions, cases, holdings, trainings, contact, scope } = detail.data;
+  const { employee: e, positions, cases, holdings, trainings, contact, scope, licenses = [], vehicles = [] } = detail.data;
+  const openMut = cases.find((c: any) => c.kind === "MUT" && c.status === "ouvert");
+  const openOff = cases.find((c: any) => c.kind === "OFF" && c.status === "ouvert");
   const full = scope === "complet";
   const isIt = has("IT", "ADMIN");
   const isHr = has("RH", "ADMIN");
@@ -68,9 +73,24 @@ export default function EmployeePage() {
                 Nouvelle demande
               </button>
             )}
+            {isHr && e.status !== "sorti" && !openMut && !openOff && (
+              <button className="btn" onClick={() => setDialog("mutation")}>
+                Mutation
+              </button>
+            )}
+            {isHr && e.status !== "sorti" && !openOff && (
+              <button className="btn" onClick={() => setDialog("depart")}>
+                Départ
+              </button>
+            )}
             {isHr && (
               <button className="btn" onClick={() => setDialog("edit")}>
                 Modifier l'identité
+              </button>
+            )}
+            {isHr && (
+              <button className="btn" onClick={() => setDialog("org")}>
+                Informations RH
               </button>
             )}
             {isIt && e.status !== "sorti" && (
@@ -97,7 +117,21 @@ export default function EmployeePage() {
               <dt>Département</dt>
               <dd>{e.department ?? "—"}</dd>
               <dt>Manager</dt>
-              <dd>{e.manager ?? "—"}</dd>
+              <dd>
+                {e.manager_employee_id ? <Link to={`/personnel/${e.manager_employee_id}`}>{e.manager_employee_name}</Link> : e.manager ?? "—"}
+              </dd>
+              {full && (
+                <>
+                  <dt>Contrat</dt>
+                  <dd>{e.contract_type ? contractTypeLabel[e.contract_type] : "—"}</dd>
+                  <dt>Profil de poste</dt>
+                  <dd>{e.job_profile_name ?? "—"}</dd>
+                  <dt>Poste fixe</dt>
+                  <dd>{e.landline ?? "—"}</dd>
+                  <dt>Wilayas</dt>
+                  <dd>{e.wilayas?.length ? e.wilayas.map((w: any) => `${w.code} ${w.name}`).join(", ") : "—"}</dd>
+                </>
+              )}
               {full && (
                 <>
                   <dt>Arrivée</dt>
@@ -126,6 +160,21 @@ export default function EmployeePage() {
                 </>
               )}
             </dl>
+            {openMut && (
+              <Notice kind="info">
+                Mutation en cours : <Link to={`/dossiers/${openMut.reference}`}>{openMut.reference}</Link> (la situation ci-dessus reste celle en vigueur).
+              </Notice>
+            )}
+            {openOff && (
+              <Notice kind="warn">
+                Départ en cours : <Link to={`/dossiers/${openOff.reference}`}>{openOff.reference}</Link>
+              </Notice>
+            )}
+            {isHr && e.status !== "sorti" && (
+              <button className="btn-link small" onClick={() => setDialog("correction")}>
+                Correction de poste datée…
+              </button>
+            )}
             {positions.length > 1 && (
               <details>
                 <summary>Historique du poste</summary>
@@ -178,6 +227,33 @@ export default function EmployeePage() {
               </table>
             )}
           </Section>
+          )}
+
+          {full && licenses.length > 0 && (
+            <Section title="Licences logicielles">
+              <ul className="timeline">
+                {licenses.map((l: any) => (
+                  <li key={l.allocation_id}>
+                    <Link to={`/parc/logiciels/${l.subscription_id}`}>{l.label}</Link> · depuis {fmtDateTime(l.since)}
+                    {l.end_date && <span className="small muted"> · échéance {fmtDate(l.end_date)}</span>}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+          {isHr && vehicles.length > 0 && (
+            <Section title="Véhicule confié">
+              <ul className="timeline">
+                {vehicles.map((v: any) => (
+                  <li key={v.assignment_id}>
+                    <Link to={`/vehicules/${v.vehicle_id}`} className="mono">
+                      {v.plate}
+                    </Link>{" "}
+                    {v.label} · depuis {fmtDateTime(v.since)} ({v.handover_reference})
+                  </li>
+                ))}
+              </ul>
+            </Section>
           )}
 
           {(trainings.length > 0 || isHr) && (
@@ -237,6 +313,10 @@ export default function EmployeePage() {
         />
       )}
       {dialog === "edit" && <EditIdentityDialog employee={e} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); detail.reload(); }} />}
+      {dialog === "org" && <EditOrgDialog employee={e} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); detail.reload(); }} />}
+      {dialog === "mutation" && <TransferDialog employee={e} onClose={() => setDialog(null)} />}
+      {dialog === "depart" && <DepartureDialog employee={e} onClose={() => setDialog(null)} />}
+      {dialog === "correction" && <PositionCorrectionDialog employee={e} onClose={() => setDialog(null)} onDone={() => { setDialog(null); detail.reload(); }} />}
     </>
   );
 }
@@ -488,6 +568,106 @@ function EditIdentityDialog({ employee, onClose, onSaved }: { employee: any; onC
         <Field label="Matricule" hint="Vider le champ efface le matricule (action tracée).">
           <input value={f.matricule} onChange={(e) => setF({ ...f, matricule: e.target.value })} />
         </Field>
+        <ErrorBox error={error} />
+        <div className="form-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button type="submit" className="btn btn-primary">
+            Enregistrer
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Données RH organisationnelles : contrat, poste fixe, wilayas, manager,
+ *  profil, département (sans changer de poste : une mutation passe par MUT). */
+function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose: () => void; onSaved: () => void }) {
+  const wilayas = useLoad(() => api<any[]>("/wilayas"), []);
+  const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
+  const [f, setF] = useState({
+    contract_type: employee.contract_type ?? "",
+    landline: employee.landline ?? "",
+    department: employee.department ?? "",
+    job_profile_id: employee.job_profile_id ?? "",
+  });
+  const [selected, setSelected] = useState<string[]>((employee.wilayas ?? []).map((w: any) => w.id));
+  const [manager, setManager] = useState<{ id: string; name: string } | null>(
+    employee.manager_employee_id ? { id: employee.manager_employee_id, name: employee.manager_employee_name } : null,
+  );
+  const [error, setError] = useState<ApiError | null>(null);
+  const submit = async (ev: FormEvent) => {
+    ev.preventDefault();
+    try {
+      await api(`/employees/${employee.id}`, {
+        method: "PATCH",
+        body: {
+          version: employee.version,
+          contract_type: f.contract_type,
+          landline: f.landline,
+          department: f.department,
+          job_profile_id: f.job_profile_id || null,
+          wilaya_ids: selected,
+          manager_employee_id: manager?.id ?? null,
+          clear_manager: !manager && !!employee.manager_employee_id,
+        },
+      });
+      onSaved();
+    } catch (err) {
+      setError(err as ApiError);
+    }
+  };
+  return (
+    <Modal title="Informations RH" onClose={onClose} wide>
+      <form onSubmit={submit}>
+        <div className="form-grid">
+          <Field label="Type de contrat">
+            <select value={f.contract_type} onChange={(e) => setF({ ...f, contract_type: e.target.value })}>
+              <option value="">—</option>
+              {Object.entries(contractTypeLabel).map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Poste fixe (téléphone)">
+            <input value={f.landline} onChange={(e) => setF({ ...f, landline: e.target.value })} />
+          </Field>
+          <Field label="Département">
+            <input list="departements-org" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value })} />
+            <datalist id="departements-org">
+              {DEPARTMENTS.map((d) => (
+                <option key={d} value={d} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label="Profil de poste">
+            <select value={f.job_profile_id} onChange={(e) => setF({ ...f, job_profile_id: e.target.value })}>
+              <option value="">—</option>
+              {profiles.data?.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <EmployeePicker value={manager} onChange={setManager} label="Manager (facultatif)" />
+        <fieldset>
+          <legend>Wilayas couvertes</legend>
+          {wilayas.data?.length === 0 && <p className="small muted">Aucune wilaya au référentiel (Administration → Référentiels).</p>}
+          <div className="inline-choice" style={{ maxHeight: 180, overflowY: "auto" }}>
+            {wilayas.data?.filter((w) => w.active).map((w) => (
+              <label key={w.id}>
+                <input type="checkbox" checked={selected.includes(w.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, w.id] : selected.filter((x) => x !== w.id))} />
+                {w.code} {w.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <ErrorBox error={error} />
         <div className="form-actions">
           <button type="button" className="btn" onClick={onClose}>

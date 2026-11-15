@@ -142,6 +142,61 @@ pub async fn seed_demo(pool: &PgPool) -> anyhow::Result<()> {
             .execute(&mut *tx)
             .await?;
     }
+    // Lot 3 : wilayas, profil de poste, siège logiciel, véhicule loué (fictifs).
+    for (code, name, region) in [(16, "Alger", "Centre"), (31, "Oran", "Ouest"), (25, "Constantine", "Est")] {
+        sqlx::query("INSERT INTO wilayas (code, name, region) VALUES ($1, $2, $3) ON CONFLICT (code) DO NOTHING")
+            .bind(code)
+            .bind(name)
+            .bind(region)
+            .execute(&mut *tx)
+            .await?;
+    }
+    let profile: Uuid = sqlx::query_scalar(
+        "INSERT INTO job_profiles (name, department, field_based, description)
+         VALUES ('Commercial terrain (démo)', 'Commercial', true, 'Profil fictif de démonstration')
+         ON CONFLICT ((lower(name))) DO UPDATE SET department = EXCLUDED.department RETURNING id",
+    )
+    .fetch_one(&mut *tx)
+    .await?;
+    for (cat, pref) in [("pc", Some("portable")), ("telephone", None), ("sim", None), ("email_pro", None), ("xena", None), ("vehicule", None)] {
+        sqlx::query("INSERT INTO profile_needs (profile_id, category, preference) VALUES ($1, $2, $3) ON CONFLICT DO NOTHING")
+            .bind(profile)
+            .bind(cat)
+            .bind(pref)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query(
+        "INSERT INTO software_subscriptions (vendor, product, offer, license_kind, start_date, end_date, seats, seat_release)
+         VALUES ('Éditeur fictif', 'Logiciel de CAO', 'Pro', 'abonnement', current_date - 30, current_date + 330, 1, 'immediat')
+         ON CONFLICT DO NOTHING",
+    )
+    .execute(&mut *tx)
+    .await?;
+    let vehicle: Uuid = sqlx::query_scalar(
+        "INSERT INTO vehicles (plate, plate_norm, kind, brand, model, site_id, odometer_km, odometer_at)
+         VALUES ('00000 116 31', '0000011631', 'location', 'Renault', 'Clio (démo)', $1, 12000, now())
+         ON CONFLICT (plate_norm) DO UPDATE SET model = EXCLUDED.model RETURNING id",
+    )
+    .bind(oran)
+    .fetch_one(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO vehicle_leases (vehicle_id, lessor, contract_no, start_date, end_date)
+         SELECT $1, 'Loueur fictif', 'LOC-DEMO-1', current_date - 200, current_date + 165
+          WHERE NOT EXISTS (SELECT 1 FROM vehicle_leases WHERE vehicle_id = $1)",
+    )
+    .bind(vehicle)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO vehicle_documents (vehicle_id, kind, reference, valid_until, note)
+         SELECT $1, 'assurance', 'POLICE-DEMO', current_date + 20, 'Pièce fictive'
+          WHERE NOT EXISTS (SELECT 1 FROM vehicle_documents WHERE vehicle_id = $1)",
+    )
+    .bind(vehicle)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
 
     println!("Jeu de démonstration FICTIF chargé. Comptes (mot de passe = DEMO_PASSWORD) :");

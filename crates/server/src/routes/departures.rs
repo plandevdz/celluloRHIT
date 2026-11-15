@@ -1033,6 +1033,7 @@ pub async fn case_json(conn: &mut PgConnection, case_id: Uuid, hr: bool, kinds: 
                 'cancelled_at', d.cancelled_at, 'cancel_reason', CASE WHEN $2 THEN d.cancel_reason ELSE NULL END,
                 'access_due', d.cutoff_at <= now(), 'access_late', d.cutoff_at + make_interval(mins => $4::int) <= now(),
                 'controls', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', x.id, 'kind', x.kind, 'label', x.label, 'detail', x.detail,
+                                 'account_id', x.account_id,
                                  'state', x.state, 'done_at', x.done_at, 'system', x.system, 'note', x.note, 'follow_up_date', x.follow_up_date,
                                  'confirmed_by', u.display_name,
                                  'task', (SELECT jsonb_build_object('id', k.id, 'status', k.status, 'owner', o.display_name)
