@@ -24,6 +24,7 @@ const tone: Record<string, string> = {
   annule_case: "muted",
   a_venir: "info",
   actif: "ok",
+  en_depart: "warn",
   sorti: "muted",
   disponible: "ok",
   reserve: "info",

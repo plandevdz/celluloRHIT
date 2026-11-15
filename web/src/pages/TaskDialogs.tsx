@@ -4,13 +4,15 @@ import { ErrorBox, Field, Modal, Notice } from "../components";
 import { useLoad } from "../hooks";
 import { fmtDate, fmtDateTime, needLabel, resolutionLabel, todayIso } from "../labels";
 
-const EQUIPMENT = ["pc", "telephone", "sim"];
+const EQUIPMENT = ["pc", "ecran", "tablette", "imprimante", "accessoire", "telephone", "sim"];
 const ACCOUNTS = ["email_pro", "xena", "intelix"];
 
 function holdingMatches(category: string, h: any): boolean {
   if (category === "pc") return h.item_type === "asset" && ["pc_portable", "pc_fixe"].includes(h.asset_kind);
   if (category === "telephone") return h.item_type === "asset" && h.asset_kind === "telephone";
   if (category === "sim") return h.item_type === "sim";
+  if (["ecran", "tablette", "imprimante"].includes(category)) return h.item_type === "asset" && h.asset_kind === category;
+  if (category === "accessoire") return h.item_type === "accessoire";
   return false;
 }
 

@@ -10,6 +10,7 @@ import {
   caseStatusLabel,
   deliveryStatusLabel,
   employeeStatusLabel,
+  EQUIPMENT_NEEDS,
   fmtDate,
   fmtDateTime,
   needLabel,
@@ -156,8 +157,26 @@ export default function CasePage() {
                       </td>
                       <td className="small">
                         {n.preference && <div>Demandé : {preferenceLabel[n.preference]}</div>}
-                        {n.quantity && <div>Quantité : {n.quantity}</div>}
+                        {n.quantity && <div>Quantité demandée : {n.quantity}</div>}
                         {n.detail && <div>{n.detail}</div>}
+                        {n.origin === "profil" && <div className="muted">suggéré par le profil</div>}
+                        {n.answer === "oui" && n.delivered !== undefined && EQUIPMENT_NEEDS.includes(n.category) && (
+                          <div>
+                            <strong>
+                              {deliveredText(n.category, n.delivered, n.quantity ?? 1)}
+                            </strong>
+                            {n.category === "pc" &&
+                              n.preference &&
+                              n.delivered_kinds?.some((k: string) => k !== `pc_${n.preference}`) &&
+                              ["fixe", "portable"].includes(n.preference) && (
+                                <div>
+                                  {n.delivered_kinds.includes("pc_portable") ? "Portable" : "PC fixe"} remis à la place du{" "}
+                                  {n.preference === "fixe" ? "fixe" : "portable"}
+                                </div>
+                              )}
+                            {n.delivered_items?.length > 0 && <div className="muted">{n.delivered_items.join(" · ")}</div>}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -420,7 +439,7 @@ export default function CasePage() {
 /** Raccourci vers l'écran qui réalise concrètement la tâche. */
 function TaskShortcut({ task, c }: { task: any; c: any }) {
   const q = new URLSearchParams({ salarie: c.employee_id, dossier: c.id, tache: task.id });
-  if (["pc", "telephone", "sim"].includes(task.need_category)) {
+  if (EQUIPMENT_NEEDS.includes(task.need_category)) {
     return (
       <Link className="btn btn-primary btn-small" to={`/parc/remise?${q}`}>
         Remettre le matériel
@@ -536,4 +555,23 @@ function CloseDialog({ c, isAdmin, onClose, onDone }: { c: any; isAdmin: boolean
       </div>
     </Modal>
   );
+}
+
+/** « Rien remis », « SIM remise », « 1 écran sur 2 remis » : quantités lisibles, accord compris. */
+function deliveredText(category: string, delivered: number, wanted: number): string {
+  if (delivered === 0) return "Rien remis pour l'instant";
+  const fem = ["sim", "tablette", "imprimante"].includes(category);
+  const word: Record<string, [string, string]> = {
+    pc: ["PC", "PC"],
+    ecran: ["écran", "écrans"],
+    tablette: ["tablette", "tablettes"],
+    imprimante: ["imprimante", "imprimantes"],
+    accessoire: ["accessoire", "accessoires"],
+    telephone: ["téléphone", "téléphones"],
+    sim: ["SIM", "SIM"],
+  };
+  const [one, many] = word[category] ?? [category, category];
+  const done = fem ? (delivered > 1 ? "remises" : "remise") : "remis";
+  if (wanted <= 1 && delivered >= 1) return `${one.charAt(0).toUpperCase()}${one.slice(1)} ${done}`;
+  return `${delivered} ${delivered > 1 ? many : one} sur ${wanted} ${done}`;
 }

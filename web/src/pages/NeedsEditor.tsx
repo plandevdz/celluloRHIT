@@ -1,6 +1,6 @@
 import { api } from "../api";
 import { useLoad } from "../hooks";
-import { answerLabel, NEED_CATEGORIES, needLabel, needTeam, roleLabel } from "../labels";
+import { answerLabel, EQUIPMENT_NEEDS, NEED_CATEGORIES, needLabel, needTeam, roleLabel } from "../labels";
 
 export type NeedValue = {
   category: string;
@@ -73,6 +73,19 @@ export function NeedsEditor({
                   </td>
                   <td>
                     <div className="row">
+                      {EQUIPMENT_NEEDS.includes(c) && n.answer === "oui" && (
+                        <input
+                          type="number"
+                          min={1}
+                          max={999}
+                          aria-label={`Quantité ${needLabel[c]}`}
+                          title="Quantité"
+                          placeholder="Qté"
+                          value={n.quantity ?? ""}
+                          onChange={(e) => set(c, { quantity: e.target.value ? Number(e.target.value) : null })}
+                          style={{ width: 70 }}
+                        />
+                      )}
                       {c === "pc" && (
                         <select
                           aria-label="Préférence de PC"
@@ -101,6 +114,7 @@ export function NeedsEditor({
         </table>
       </div>
       <p className="small muted">
+        Téléphone, SIM et ligne sont distincts : une recrue peut recevoir une SIM sans nouveau téléphone. Quantité vide = 1.
         L'IT choisit la plateforme email (cPanel ou Microsoft 365) et peut remplacer le PC préféré selon le stock, en le
         justifiant. Une réponse non renseignée reste « à préciser ».
       </p>

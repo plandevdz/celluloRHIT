@@ -14,6 +14,10 @@ export const roleLabel: Record<string, string> = {
 
 export const NEED_CATEGORIES = [
   "pc",
+  "ecran",
+  "tablette",
+  "imprimante",
+  "accessoire",
   "telephone",
   "sim",
   "email_pro",
@@ -27,6 +31,10 @@ export type NeedCategory = (typeof NEED_CATEGORIES)[number];
 
 export const needLabel: Record<string, string> = {
   pc: "PC",
+  ecran: "Écran",
+  tablette: "Tablette",
+  imprimante: "Imprimante",
+  accessoire: "Accessoire",
   telephone: "Téléphone",
   sim: "SIM / ligne",
   email_pro: "Adresse email professionnelle",
@@ -39,6 +47,10 @@ export const needLabel: Record<string, string> = {
 
 export const needTeam: Record<string, Role> = {
   pc: "IT",
+  ecran: "IT",
+  tablette: "IT",
+  imprimante: "IT",
+  accessoire: "IT",
   telephone: "IT",
   sim: "IT",
   email_pro: "IT",
@@ -85,8 +97,17 @@ export const taskStatusLabel: Record<string, string> = {
 export const employeeStatusLabel: Record<string, string> = {
   a_venir: "À venir",
   actif: "Actif",
+  en_depart: "En départ",
   sorti: "Sorti",
 };
+
+/** Besoins d'équipement : quantité possible, preuve par remise. */
+export const EQUIPMENT_NEEDS = ["pc", "ecran", "tablette", "imprimante", "accessoire", "telephone", "sim"];
+
+/** Statut affiché : « En départ » tant que la personne n'est pas sortie. */
+export function displayStatus(e: { status: string; leaving?: boolean }): string {
+  return e.leaving && e.status !== "sorti" ? "en_depart" : e.status;
+}
 
 export const assetStatusLabel: Record<string, string> = {
   disponible: "Disponible",

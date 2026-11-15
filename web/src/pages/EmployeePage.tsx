@@ -9,6 +9,7 @@ import {
   caseStatusLabel,
   contractTypeLabel,
   DEPARTMENTS,
+  displayStatus,
   employeeStatusLabel,
   fmtDate,
   fmtDateTime,
@@ -52,7 +53,7 @@ export default function EmployeePage() {
         }
         subtitle={
           <>
-            <Badge status={e.status} label={employeeStatusLabel[e.status]} /> · {e.job_title ?? "poste ?"} · {e.site_name ?? "site ?"}
+            <Badge status={displayStatus(e)} label={employeeStatusLabel[displayStatus(e)]} /> · {e.job_title ?? "poste ?"} · {e.site_name ?? "site ?"}
             {full && (e.matricule ? ` · matricule ${e.matricule}` : " · sans matricule")}
           </>
         }
@@ -118,7 +119,15 @@ export default function EmployeePage() {
               <dd>{e.department ?? "—"}</dd>
               <dt>Manager</dt>
               <dd>
-                {e.manager_employee_id ? <Link to={`/personnel/${e.manager_employee_id}`}>{e.manager_employee_name}</Link> : e.manager ?? "—"}
+                {e.manager_employee_id ? (
+                  <Link to={`/personnel/${e.manager_employee_id}`}>{e.manager_employee_name}</Link>
+                ) : e.manager ? (
+                  <>
+                    {e.manager} <span className="tag">à rattacher à une fiche</span>
+                  </>
+                ) : (
+                  "—"
+                )}
               </dd>
               {full && (
                 <>
@@ -126,8 +135,26 @@ export default function EmployeePage() {
                   <dd>{e.contract_type ? contractTypeLabel[e.contract_type] : "—"}</dd>
                   <dt>Profil de poste</dt>
                   <dd>{e.job_profile_name ?? "—"}</dd>
-                  <dt>Poste fixe</dt>
-                  <dd>{e.landline ?? "—"}</dd>
+                  {e.poste_fixe && (
+                    <>
+                      <dt>« Poste fixe » (ancien champ)</dt>
+                      <dd>
+                        {e.poste_fixe} <span className="small muted">sens à confirmer</span>
+                      </dd>
+                    </>
+                  )}
+                  {e.leaving && (
+                    <>
+                      <dt>En départ</dt>
+                      <dd>sortie prévue le {fmtDate(e.planned_exit_date)}</dd>
+                    </>
+                  )}
+                  {e.import_note && (
+                    <>
+                      <dt>Remarque de reprise</dt>
+                      <dd className="small">{e.import_note}</dd>
+                    </>
+                  )}
                   <dt>Wilayas</dt>
                   <dd>{e.wilayas?.length ? e.wilayas.map((w: any) => `${w.code} ${w.name}`).join(", ") : "—"}</dd>
                 </>
@@ -149,8 +176,32 @@ export default function EmployeePage() {
                 <>
                   <dt>Email pro</dt>
                   <dd>{contact.email_pro ?? "non consigné"}</dd>
-                  <dt>Mobile pro</dt>
-                  <dd>{contact.mobile ?? "aucune ligne remise"}</dd>
+                  <dt>Lignes mobiles</dt>
+                  <dd>
+                    {(contact.lines ?? []).length === 0
+                      ? contact.mobile ?? "aucune ligne remise"
+                      : contact.lines.map((l: any) => (
+                          <div key={l.line_id}>
+                            {l.number} <span className="small muted">{l.operator}</span>{" "}
+                            {l.primary ? (
+                              <span className="tag">principale</span>
+                            ) : (
+                              (isHr || isIt) &&
+                              full && (
+                                <button
+                                  className="btn-link small"
+                                  onClick={async () => {
+                                    await api(`/employees/${e.id}/primary-line`, { body: { line_id: l.line_id } });
+                                    detail.reload();
+                                  }}
+                                >
+                                  définir comme principale
+                                </button>
+                              )
+                            )}
+                          </div>
+                        ))}
+                  </dd>
                 </>
               )}
               {e.exit_date && (
@@ -588,8 +639,10 @@ function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose:
   const wilayas = useLoad(() => api<any[]>("/wilayas"), []);
   const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
   const [f, setF] = useState({
+    leaving: !!employee.leaving,
+    planned_exit_date: employee.planned_exit_date ?? "",
     contract_type: employee.contract_type ?? "",
-    landline: employee.landline ?? "",
+    poste_fixe: employee.poste_fixe ?? "",
     department: employee.department ?? "",
     job_profile_id: employee.job_profile_id ?? "",
   });
@@ -606,7 +659,9 @@ function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose:
         body: {
           version: employee.version,
           contract_type: f.contract_type,
-          landline: f.landline,
+          poste_fixe: f.poste_fixe,
+          leaving: f.leaving,
+          planned_exit_date: f.leaving ? f.planned_exit_date : "",
           department: f.department,
           job_profile_id: f.job_profile_id || null,
           wilaya_ids: selected,
@@ -633,8 +688,8 @@ function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose:
               ))}
             </select>
           </Field>
-          <Field label="Poste fixe (téléphone)">
-            <input value={f.landline} onChange={(e) => setF({ ...f, landline: e.target.value })} />
+          <Field label="« Poste fixe » (ancien champ, sens à confirmer)">
+            <input value={f.poste_fixe} onChange={(e) => setF({ ...f, poste_fixe: e.target.value })} />
           </Field>
           <Field label="Département">
             <input list="departements-org" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value })} />
@@ -656,6 +711,20 @@ function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose:
           </Field>
         </div>
         <EmployeePicker value={manager} onChange={setManager} label="Manager (facultatif)" />
+        {employee.status !== "sorti" && (
+          <fieldset>
+            <legend>En départ</legend>
+            <label className="inline-choice">
+              <input type="checkbox" checked={f.leaving} onChange={(e) => setF({ ...f, leaving: e.target.checked })} /> La personne prépare sa sortie
+              (elle reste dans l'effectif ; aucun processus de départ n'est lancé)
+            </label>
+            {f.leaving && (
+              <Field label="Date de sortie prévue">
+                <input type="date" value={f.planned_exit_date} onChange={(e) => setF({ ...f, planned_exit_date: e.target.value })} />
+              </Field>
+            )}
+          </fieldset>
+        )}
         <fieldset>
           <legend>Wilayas couvertes</legend>
           {wilayas.data?.length === 0 && <p className="small muted">Aucune wilaya au référentiel (Administration → Référentiels).</p>}

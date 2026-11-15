@@ -13,7 +13,8 @@ import {
   repriseResultLabel,
 } from "../labels";
 
-const PROFILE_NEEDS = ["pc", "telephone", "sim", "email_pro", "xena", "intelix", "carte_visite", "vehicule"];
+const PROFILE_NEEDS = ["pc", "ecran", "tablette", "imprimante", "accessoire", "telephone", "sim", "email_pro", "xena", "intelix", "carte_visite", "vehicule"];
+const PROFILE_QTY = ["pc", "ecran", "tablette", "imprimante", "accessoire", "telephone", "sim"];
 
 // ------------------------------------------------------------------ profils de poste
 
@@ -40,7 +41,9 @@ export function ProfilesTab() {
                   </div>
                 </td>
                 <td className="small">
-                  {p.needs.map((n: any) => needLabel[n.category] + (n.preference ? ` (${preferenceLabel[n.preference]?.toLowerCase()})` : "")).join(", ") || "—"}
+                  {p.needs
+                    .map((n: any) => (n.quantity > 1 ? `${n.quantity} × ` : "") + needLabel[n.category] + (n.preference ? ` (${preferenceLabel[n.preference]?.toLowerCase()})` : ""))
+                    .join(", ") || "—"}
                   {p.trainings.length > 0 && <div className="muted">Formations : {p.trainings.map((t: any) => t.name).join(", ")}</div>}
                 </td>
                 <td>
@@ -69,11 +72,11 @@ function ProfileDialog({ profile, onClose, onDone }: { profile: any | null; onCl
     field_based: !!profile?.field_based,
     active: profile?.active ?? true,
   });
-  const [needs, setNeeds] = useState<Record<string, { on: boolean; preference: string }>>(() =>
+  const [needs, setNeeds] = useState<Record<string, { on: boolean; preference: string; quantity: string; detail: string }>>(() =>
     Object.fromEntries(
       PROFILE_NEEDS.map((c) => {
         const n = profile?.needs.find((x: any) => x.category === c);
-        return [c, { on: !!n, preference: n?.preference ?? "" }];
+        return [c, { on: !!n, preference: n?.preference ?? "", quantity: n?.quantity ? String(n.quantity) : "", detail: n?.detail ?? "" }];
       }),
     ),
   );
@@ -90,7 +93,12 @@ function ProfileDialog({ profile, onClose, onDone }: { profile: any | null; onCl
       access_notes: f.access_notes || null,
       needs: Object.entries(needs)
         .filter(([, v]) => v.on)
-        .map(([c, v]) => ({ category: c, preference: c === "pc" ? v.preference || null : null })),
+        .map(([c, v]) => ({
+          category: c,
+          preference: c === "pc" ? v.preference || null : null,
+          quantity: PROFILE_QTY.includes(c) && v.quantity ? Number(v.quantity) : null,
+          detail: v.detail || null,
+        })),
       trainings,
     };
     try {
@@ -117,13 +125,31 @@ function ProfileDialog({ profile, onClose, onDone }: { profile: any | null; onCl
           </Field>
         </div>
         <fieldset>
-          <legend>Besoins suggérés</legend>
+          <legend>Besoins suggérés (point de départ, jamais une preuve de remise)</legend>
           {PROFILE_NEEDS.map((c) => (
             <div key={c} className="row" style={{ marginBottom: ".3rem" }}>
               <label className="inline-choice">
                 <input type="checkbox" checked={needs[c].on} onChange={(e) => setNeeds({ ...needs, [c]: { ...needs[c], on: e.target.checked } })} />
                 {needLabel[c]}
               </label>
+              {PROFILE_QTY.includes(c) && needs[c].on && (
+                <input
+                  type="number"
+                  min={1}
+                  placeholder="Qté"
+                  aria-label={`Quantité ${needLabel[c]}`}
+                  value={needs[c].quantity}
+                  onChange={(e) => setNeeds({ ...needs, [c]: { ...needs[c], quantity: e.target.value } })}
+                  style={{ width: 70 }}
+                />
+              )}
+              {c === "accessoire" && needs.accessoire.on && (
+                <input
+                  placeholder="Lequel (chargeur, souris…)"
+                  value={needs.accessoire.detail}
+                  onChange={(e) => setNeeds({ ...needs, accessoire: { ...needs.accessoire, detail: e.target.value } })}
+                />
+              )}
               {c === "pc" && needs.pc.on && (
                 <select value={needs.pc.preference} onChange={(e) => setNeeds({ ...needs, pc: { ...needs.pc, preference: e.target.value } })} aria-label="Préférence de PC">
                   <option value="">Préférence…</option>
@@ -149,7 +175,7 @@ function ProfileDialog({ profile, onClose, onDone }: { profile: any | null; onCl
         <Field label="Fonctions types">
           <input value={f.typical_titles} onChange={(e) => setF({ ...f, typical_titles: e.target.value })} />
         </Field>
-        <Field label="Accès à créer (note pour l'IT)">
+        <Field label="Autres accès à préciser (note pour l'IT)">
           <textarea rows={2} value={f.access_notes} onChange={(e) => setF({ ...f, access_notes: e.target.value })} />
         </Field>
         <Field label="Description">

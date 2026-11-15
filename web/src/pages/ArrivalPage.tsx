@@ -4,7 +4,7 @@ import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
 import { EmployeePicker, ErrorBox, Field, Notice, PageHeader } from "../components";
 import { useLoad, useUnsavedWarning } from "../hooks";
-import { contractTypeLabel, DEPARTMENTS, employeeStatusLabel, fmtDate, roleLabel, visibilityText } from "../labels";
+import { contractTypeLabel, DEPARTMENTS, employeeStatusLabel, fmtDate, needLabel, roleLabel, visibilityText } from "../labels";
 import { emptyNeeds, NeedsEditor, needsPayload, recipients, TrainingValue } from "./NeedsEditor";
 
 type Site = { id: string; name: string; active: boolean };
@@ -45,6 +45,8 @@ export default function ArrivalPage() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [result, setResult] = useState<ArrivalResult | null>(null);
+  // Choix manuels conservés quand un profil est appliqué (déclaré avant tout retour anticipé).
+  const [kept, setKept] = useState<string[]>([]);
   const health = useLoad(() => api<{ mail_mode: string }>("/health"), []);
   const mailMode = health.data?.mail_mode ?? "journal";
 
@@ -158,13 +160,30 @@ export default function ArrivalPage() {
   const applyProfile = (id: string) => {
     setOptional({ ...optional, job_profile_id: id, department: optional.department || profiles.data?.find((p) => p.id === id)?.department || "" });
     const p = profiles.data?.find((x) => x.id === id);
-    if (!p) return;
+    // Les choix déjà faits à la main sont conservés ; seules les valeurs
+    // encore « suggérées » ou non renseignées suivent le nouveau profil.
+    const manual = (n: { answer: string; origin?: string | null; detail?: string | null; quantity?: number | null }) =>
+      n.origin !== "profil" && (n.answer !== "a_preciser" || !!n.detail || !!n.quantity);
     const next = emptyNeeds();
-    for (const n of p.needs) {
-      next[n.category] = { category: n.category, answer: "oui", preference: n.preference, quantity: n.quantity, detail: n.detail, origin: "profil" };
+    const keptNow: string[] = [];
+    for (const [c, n] of Object.entries(needs)) {
+      if (manual(n)) {
+        next[c] = n;
+        keptNow.push(c);
+      }
+    }
+    for (const n of p?.needs ?? []) {
+      if (!keptNow.includes(n.category)) {
+        next[n.category] = { category: n.category, answer: "oui", preference: n.preference, quantity: n.quantity, detail: n.detail, origin: "profil" };
+      }
     }
     setNeeds(next);
-    setTrainings(p.trainings.map((t: any) => ({ catalog_id: t.catalog_id })));
+    setKept(keptNow);
+    const previous = profiles.data?.find((x) => x.id === optional.job_profile_id);
+    const fromPrevious = new Set<string>((previous?.trainings ?? []).map((t: any) => t.catalog_id));
+    const manualTrainings = trainings.filter((t) => !fromPrevious.has(t.catalog_id));
+    const suggested = (p?.trainings ?? []).map((t: any) => ({ catalog_id: t.catalog_id })).filter((t: any) => !manualTrainings.some((m) => m.catalog_id === t.catalog_id));
+    setTrainings([...manualTrainings, ...suggested]);
   };
 
   return (
@@ -263,8 +282,11 @@ export default function ArrivalPage() {
         </section>
 
         <section className="card">
-          <details>
+          <details open={!!optional.job_profile_id}>
             <summary>Préciser les besoins maintenant</summary>
+            {kept.length > 0 && (
+              <Notice kind="info">Vos choix manuels sont conservés : {kept.map((c) => needLabel[c]).join(", ")}.</Notice>
+            )}
             <NeedsEditor needs={needs} onChange={setNeeds} trainings={trainings} onTrainings={setTrainings} />
           </details>
         </section>
