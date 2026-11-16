@@ -5,11 +5,15 @@
 //! normalisations) et se teste sans infrastructure.
 
 pub mod cases;
+pub mod inventory;
+pub mod legacy;
 pub mod movements;
 pub mod needs;
 pub mod roles;
 pub mod tasks;
 pub mod text;
+pub mod transitions;
+pub mod vehicles;
 
 pub use cases::{CaseKind, CaseStatus};
 pub use needs::{NeedAnswer, NeedCategory, PcPreference};
@@ -33,11 +37,11 @@ impl RuleError {
 
 /// Déclare une énumération stockée en base sous forme de texte.
 macro_rules! text_enum {
-    ($(#[$meta:meta])* $name:ident { $($variant:ident => $text:literal),+ $(,)? }) => {
+    ($(#[$meta:meta])* $name:ident { $($(#[$vmeta:meta])* $variant:ident => $text:literal),+ $(,)? }) => {
         $(#[$meta])*
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
         pub enum $name {
-            $(#[serde(rename = $text)] $variant),+
+            $($(#[$vmeta])* #[serde(rename = $text)] $variant),+
         }
 
         impl $name {

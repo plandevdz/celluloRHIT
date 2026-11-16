@@ -29,7 +29,7 @@ pub fn routes(max_upload: usize) -> Router<AppState> {
         .route("/documents/{id}/original", get(download_original))
         .route(
             "/documents/{id}/scan",
-            post(upload_scan).layer(DefaultBodyLimit::max(max_upload + 64 * 1024)),
+            post(upload_scan).layer(DefaultBodyLimit::max(max_upload + 64 * 1024)).get(download_latest_scan),
         )
         .route("/documents/{id}/scan/{version}", get(download_scan))
 }
@@ -46,7 +46,9 @@ pub async fn holdings_json(conn: &mut PgConnection, employee_id: Uuid) -> AppRes
                     'asset_kind', (SELECT kind FROM assets WHERE id = a.asset_id),
                     'label', ml.label, 'identifier', ml.identifier, 'quantity', a.quantity,
                     'open_quantity', a.open_quantity, 'since', a.started_at,
-                    'origin_reference', m.reference, 'case_reference', c.reference)
+                    'origin_reference', m.reference, 'case_reference', c.reference,
+                    'reprise_note', CASE WHEN m.kind = 'reprise' THEN m.note END,
+                    'legacy_proof_url', m.legacy_proof_url, 'legacy_proof_ref', m.legacy_proof_ref)
                     ORDER BY a.started_at, ml.line_no), '[]')
            FROM assignments a
            JOIN movement_lines ml ON ml.id = a.handover_line_id
@@ -166,7 +168,7 @@ async fn create_document(conn: &mut PgConnection, movement_id: Uuid, kind: &str)
 /// Le worker rattrape toute génération manquée.
 fn spawn_pdf(state: &AppState, document_id: Uuid) {
     let pool = state.pool.clone();
-    let config = state.config.clone();
+    let config = state.cfg();
     tokio::spawn(async move {
         if let Err(e) = documents::ensure_original(&pool, &config, document_id).await {
             tracing::warn!(document = %document_id, error = %e, "génération PDF différée au worker");
@@ -531,6 +533,9 @@ async fn create_return(
         .bind(effective_at)
         .execute(&mut *tx)
         .await?;
+        if qty == open_qty {
+            crate::routes::departures::on_returned(&mut tx, &user, Some(assignment_id), None, &reference).await?;
+        }
         match item_type.as_str() {
             // Un poste rendu passe en contrôle avant d'être de nouveau disponible.
             "asset" => {
@@ -635,7 +640,7 @@ async fn movement_detail(State(state): State<AppState>, user: CurrentUser, Path(
 }
 
 async fn send_file(state: &AppState, relative: &str, mime: &str, filename: &str) -> AppResult<Response> {
-    let bytes = tokio::fs::read(state.config.data_dir.join(relative))
+    let bytes = tokio::fs::read(state.cfg().data_dir.join(relative))
         .await
         .map_err(|e| anyhow::anyhow!("lecture du document {relative} : {e}"))?;
     Ok((
@@ -657,7 +662,7 @@ async fn download_original(State(state): State<AppState>, user: CurrentUser, Pat
         .await?;
     exists.ok_or_else(|| AppError::not_found("document"))?;
     // Génération à la demande si le worker n'est pas encore passé.
-    documents::ensure_original(&state.pool, &state.config, id).await?;
+    documents::ensure_original(&state.pool, &state.cfg(), id).await?;
     let (path, reference): (String, String) = sqlx::query_as(
         "SELECT v.storage_path, m.reference FROM document_versions v
            JOIN documents d ON d.id = v.document_id JOIN movements m ON m.id = d.movement_id
@@ -687,8 +692,8 @@ async fn upload_scan(
         }
     }
     let bytes = bytes.ok_or_else(|| AppError::invalid("file", "fichier manquant"))?;
-    if bytes.is_empty() || bytes.len() > state.config.max_upload_bytes {
-        return Err(AppError::invalid("file", format!("taille maximale {} Mo", state.config.max_upload_bytes / 1024 / 1024)));
+    if bytes.is_empty() || bytes.len() > state.cfg().max_upload_bytes {
+        return Err(AppError::invalid("file", format!("taille maximale {} Mo", state.cfg().max_upload_bytes / 1024 / 1024)));
     }
     let (mime, ext) = documents::sniff_scan(&bytes)
         .ok_or_else(|| AppError::invalid("file", "format refusé : PDF, PNG ou JPEG uniquement"))?;
@@ -719,11 +724,11 @@ async fn upload_scan(
     .fetch_one(&mut *tx)
     .await?;
     let relative = documents::movement_dir(case_ref.as_deref(), &mkind, &mref).join(format!("v1-scan-{version}.{ext}"));
-    documents::write_file(&state.config.data_dir, &relative, &bytes).await?;
+    documents::write_file(&state.cfg().data_dir, &relative, &bytes).await?;
     let sha = documents::sha256_hex(&bytes);
     sqlx::query(
         "INSERT INTO document_versions (document_id, version, file_kind, storage_path, sha256, size_bytes, mime_type, archive_status, created_by)
-         VALUES ($1, $2, 'scan', $3, $4, $5, $6, 'desactive', $7)",
+         VALUES ($1, $2, 'scan', $3, $4, $5, $6, $8, $7)",
     )
     .bind(id)
     .bind(version)
@@ -732,6 +737,7 @@ async fn upload_scan(
     .bind(bytes.len() as i64)
     .bind(mime)
     .bind(user.id)
+    .bind(state.cfg().archive_mode.initial_status())
     .execute(&mut *tx)
     .await?;
     sqlx::query("UPDATE documents SET status = 'signe', updated_at = now() WHERE id = $1")
@@ -753,6 +759,15 @@ async fn upload_scan(
     .await?;
     tx.commit().await?;
     Ok(Json(json!({ "status": "signe", "version": version })))
+}
+
+/// Dernier scan déposé (bouton « Ouvrir le scan signé »).
+async fn download_latest_scan(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Response> {
+    user.require(&[Role::It, Role::Rh, Role::Admin])?;
+    let version: Option<i32> =
+        sqlx::query_scalar("SELECT max(version) FROM document_versions WHERE document_id = $1 AND file_kind = 'scan'").bind(id).fetch_one(&state.pool).await?;
+    let version = version.ok_or_else(|| AppError::not_found("scan"))?;
+    download_scan(State(state), user, Path((id, version))).await
 }
 
 async fn download_scan(

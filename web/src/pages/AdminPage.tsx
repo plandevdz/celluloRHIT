@@ -5,11 +5,18 @@ import { useAuth } from "../auth";
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHeader, Section } from "../components";
 import { useCommand, useLoad } from "../hooks";
 import { deliveryStatusLabel, fmtDateTime, Role, roleLabel, ROLES } from "../labels";
+import { ArchiveTab, ProfilesTab, RepriseTab, WilayasTab } from "./AdminExtras";
+import { ModelesTab, ParametresTab, SauvegardesTab } from "./AdminSettings";
 
 const TABS = [
   { id: "utilisateurs", label: "Utilisateurs et rôles" },
   { id: "sites", label: "Sites et locaux" },
+  { id: "referentiels", label: "Profils et wilayas" },
+  { id: "modeles", label: "Modèles de tâches" },
+  { id: "parametres", label: "Paramètres" },
+  { id: "sauvegardes", label: "Sauvegardes" },
   { id: "avis", label: "Avis et mails" },
+  { id: "reprise", label: "Import des listes" },
 ];
 
 export default function AdminPage() {
@@ -30,6 +37,17 @@ export default function AdminPage() {
       {tab === "utilisateurs" && <UsersTab />}
       {tab === "sites" && <SitesTab />}
       {tab === "avis" && <NotificationsTab />}
+      {tab === "referentiels" && (
+        <div className="stack">
+          <ProfilesTab />
+          <WilayasTab />
+        </div>
+      )}
+      {tab === "modeles" && <ModelesTab />}
+      {tab === "parametres" && <ParametresTab />}
+      {tab === "sauvegardes" && <SauvegardesTab />}
+      {tab === "exploitation" && <ArchiveTab />}
+      {tab === "reprise" && <RepriseTab />}
     </>
   );
 }
@@ -212,9 +230,66 @@ function SitesTab() {
       <Section title="Sites">
         {sites.data?.length === 0 && <Empty>Aucun site : créez-en au moins un pour annoncer des arrivées.</Empty>}
         {sites.data?.map((s) => (
-          <div key={s.id} className="card" style={{ marginBottom: ".6rem" }}>
-            <strong>{s.name}</strong> <span className="mono small muted">{s.code}</span>
-            <div className="small">Locaux : {s.locations.length ? s.locations.map((l: any) => l.name).join(", ") : "aucun"}</div>
+          <div key={s.id} className="card" style={{ marginBottom: ".6rem", opacity: s.active ? 1 : 0.7 }}>
+            <div className="row">
+              <strong>{s.name}</strong> <span className="mono small muted">{s.code}</span>
+              {!s.active && <Badge status="muted" label="fermé" />}
+              {s.name === "À préciser" && <span className="tag">site technique des fiches importées sans site</span>}
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={async () => {
+                  const name = window.prompt("Nouveau nom du site", s.name);
+                  if (name && name.trim() && name !== s.name && (await cmd.run(() => api(`/admin/sites/${s.id}`, { method: "PATCH", body: { name } })))) sites.reload();
+                }}
+              >
+                Renommer
+              </button>
+              <button
+                type="button"
+                className="btn btn-small"
+                onClick={async () => {
+                  if (s.active && !window.confirm(`Fermer le site « ${s.name} » ? Il ne sera plus proposé ; les fiches et biens rattachés restent.`)) return;
+                  if (await cmd.run(() => api(`/admin/sites/${s.id}`, { method: "PATCH", body: { active: !s.active } }))) sites.reload();
+                }}
+              >
+                {s.active ? "Fermer" : "Rouvrir"}
+              </button>
+            </div>
+            <div className="small">
+              Locaux :{" "}
+              {s.locations.length
+                ? s.locations.map((l: any) => (
+                    <span key={l.id} className="tag">
+                      {l.name}{" "}
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title={`Renommer ${l.name}`}
+                        aria-label={`Renommer ${l.name}`}
+                        onClick={async () => {
+                          const name = window.prompt("Nouveau nom du local", l.name);
+                          if (name && name.trim() && name !== l.name && (await cmd.run(() => api(`/admin/locations/${l.id}`, { method: "PATCH", body: { name } })))) sites.reload();
+                        }}
+                      >
+                        ✎
+                      </button>
+                      <button
+                        type="button"
+                        className="btn-icon"
+                        title={`Retirer ${l.name}`}
+                        aria-label={`Retirer ${l.name}`}
+                        onClick={async () => {
+                          if (window.confirm(`Retirer le local « ${l.name} » des choix proposés ?`) && (await cmd.run(() => api(`/admin/locations/${l.id}`, { method: "PATCH", body: { active: false } }))))
+                            sites.reload();
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))
+                : "aucun"}
+            </div>
             <form
               className="row"
               style={{ marginTop: ".4rem" }}
@@ -265,12 +340,25 @@ function SitesTab() {
 function NotificationsTab() {
   const [status, setStatus] = useState("");
   const list = useLoad(() => api<any[]>(`/admin/notifications${status ? `?status=${status}` : ""}`), [status]);
+  const settings = useLoad(() => api<any>("/admin/settings"), []);
+  const [retrying, setRetrying] = useState<any | null>(null);
+  const cmd = useCommand();
+  const graph = settings.data?.mail_mode === "graph";
   return (
     <Section title="Avis émis et remises">
-      <Notice kind="info">
-        Mode actuel : <strong>journal (test)</strong> — les avis sont consignés ici, <strong>aucun e-mail n'est envoyé</strong>. « Consigné »
-        ne signifie pas « reçu ». L'envoi Exchange Online sera activé au raccordement Microsoft Graph.
-      </Notice>
+      {graph ? (
+        <Notice kind="info">
+          Mode actuel : <strong>Exchange Online</strong> depuis {settings.data.mail_sender}. « Accepté par Exchange » ne prouve pas la livraison ;
+          « à vérifier » signifie un résultat inconnu : contrôlez avant toute reprise.
+          {settings.data.mail_test_recipient && <> Redirection de test vers {settings.data.mail_test_recipient}.</>}
+        </Notice>
+      ) : (
+        <Notice kind="info">
+          Mode actuel : <strong>journal (test)</strong> — les avis sont consignés ici, <strong>aucun e-mail n'est envoyé</strong>. « Consigné » ne
+          signifie pas « reçu ».
+        </Notice>
+      )}
+      <ErrorBox error={cmd.error} />
       <div className="filters">
         <label className="field">
           <span className="field-label">Filtrer</span>
@@ -306,6 +394,10 @@ function NotificationsTab() {
                   <td className="nowrap small">{fmtDateTime(n.created_at)}</td>
                   <td>
                     {n.subject}
+                    <details>
+                      <summary className="small">Aperçu du message</summary>
+                      <pre className="small" style={{ whiteSpace: "pre-wrap", margin: 0 }}>{n.body}</pre>
+                    </details>
                     {n.outbox_error && <div className="small" style={{ color: "var(--danger)" }}>{n.outbox_error}</div>}
                     {n.missing_roles?.length > 0 && (
                       <div className="small" style={{ color: "var(--danger)" }}>
@@ -320,6 +412,14 @@ function NotificationsTab() {
                       <div key={d.recipient}>
                         {d.recipient} <Badge status={d.status} label={deliveryStatusLabel[d.status]} />
                         {d.sent_to !== d.recipient && <span className="muted"> → {d.sent_to}</span>}
+                        <span className="muted"> · {d.attempts} essai(s)</span>
+                        {d.last_result && <div className="muted">{d.last_result}</div>}
+                        {d.retried_reason && <div className="muted">Reprise : {d.retried_reason}</div>}
+                        {["echec", "a_verifier"].includes(d.status) && (
+                          <button className="btn-link" onClick={() => setRetrying(d)}>
+                            Reprendre l'envoi…
+                          </button>
+                        )}
                       </div>
                     ))}
                   </td>
@@ -329,6 +429,46 @@ function NotificationsTab() {
           </table>
         </div>
       )}
+      {retrying && (
+        <Modal title={`Reprendre l'avis pour ${retrying.recipient}`} onClose={() => setRetrying(null)}>
+          <RetryForm
+            status={retrying.status}
+            onCancel={() => setRetrying(null)}
+            onConfirm={async (reason) => {
+              const r = await cmd.run(() => api(`/admin/deliveries/${retrying.id}/retry`, { body: { reason } }));
+              setRetrying(null);
+              if (r) list.reload();
+            }}
+          />
+        </Modal>
+      )}
     </Section>
+  );
+}
+
+function RetryForm({ status, onCancel, onConfirm }: { status: string; onCancel: () => void; onConfirm: (reason: string) => void }) {
+  const [reason, setReason] = useState("");
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        onConfirm(reason);
+      }}
+    >
+      {status === "a_verifier" && (
+        <Notice kind="warn">Résultat inconnu : vérifiez que le message n'a pas déjà été reçu avant de le renvoyer.</Notice>
+      )}
+      <Field label="Motif de la reprise" required>
+        <input value={reason} onChange={(e) => setReason(e.target.value)} required placeholder="droits Exchange corrigés, adresse vérifiée…" />
+      </Field>
+      <div className="form-actions">
+        <button type="button" className="btn" onClick={onCancel}>
+          Annuler
+        </button>
+        <button type="submit" className="btn btn-primary">
+          Remettre en file d'envoi
+        </button>
+      </div>
+    </form>
   );
 }

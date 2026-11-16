@@ -17,7 +17,21 @@ use crate::auth::CurrentUser;
 use crate::error::{AppError, AppResult};
 use crate::idempotency::{self, Begin};
 use crate::routes::employees::{insert_employee, required, NewEmployee};
+use crate::config::{Config, Module};
 use crate::state::AppState;
+
+/// Pendant le pilote (module Véhicules fermé), un besoin véhicule ne crée
+/// aucune tâche RH : elle ne pourrait être ni traitée ni soldée et
+/// bloquerait la clôture. La demande se traite hors de l'application.
+fn need_open(config: &Config, category: NeedCategory, answer: NeedAnswer) -> AppResult<()> {
+    if category == NeedCategory::Vehicule && answer == NeedAnswer::Oui && !config.module_on(Module::Vehicules) {
+        return Err(AppError::invalid(
+            "needs",
+            "Véhicule : non géré dans l'application pendant le pilote. Laissez « à préciser » et traitez la demande hors de l'application.",
+        ));
+    }
+    Ok(())
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -38,6 +52,9 @@ pub struct NeedDto {
     pub quantity: Option<i32>,
     pub preference: Option<PcPreference>,
     pub detail: Option<String>,
+    /// `profil` si la valeur vient de la suggestion du profil de poste.
+    #[serde(default)]
+    pub origin: Option<String>,
 }
 
 impl NeedDto {
@@ -71,6 +88,11 @@ struct ArrivalInput {
     matricule: Option<String>,
     department: Option<String>,
     manager: Option<String>,
+    manager_employee_id: Option<Uuid>,
+    job_profile_id: Option<Uuid>,
+    contract_type: Option<String>,
+    #[serde(default)]
+    wilaya_ids: Vec<Uuid>,
     #[serde(default)]
     needs: Vec<NeedDto>,
     #[serde(default)]
@@ -80,7 +102,7 @@ struct ArrivalInput {
 
 // ------------------------------------------------------------------ outils communs
 
-async fn next_reference(conn: &mut PgConnection, kind: CaseKind) -> AppResult<String> {
+pub async fn next_reference(conn: &mut PgConnection, kind: CaseKind) -> AppResult<String> {
     let n: i64 = sqlx::query_scalar(&format!("SELECT nextval('{}')", kind.sequence_name()))
         .fetch_one(conn)
         .await?;
@@ -197,8 +219,11 @@ pub async fn apply_need(
     let mut task_created = false;
     if let Some(spec) = task_for_need(need) {
         let created: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO tasks (case_id, need_id, gen_key, role, title, due_date)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            "INSERT INTO tasks (case_id, need_id, gen_key, role, title, due_date, instructions, display_order)
+             SELECT $1, $2, $3, $4, coalesce(m.title, $5),
+                    CASE WHEN m.delay_days IS NOT NULL AND $6::date IS NOT NULL THEN $6::date + m.delay_days ELSE $6::date END,
+                    m.instructions, coalesce(m.display_order, 100)
+               FROM (SELECT 1) one LEFT JOIN task_templates m ON m.task_key = $3
              ON CONFLICT (case_id, gen_key) DO UPDATE
                 SET status = 'a_faire', owner_id = NULL, blocked_reason = NULL, claimed_at = NULL,
                     version = tasks.version + 1, updated_at = now()
@@ -276,8 +301,8 @@ pub async fn add_training(
         }
     }
     let session_id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO training_sessions (case_id, employee_id, catalog_id, trainer_id)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO training_sessions (case_id, employee_id, catalog_id, trainer_id, trainer_name)
+         VALUES ($1, $2, $3, $4, CASE WHEN $4::uuid IS NULL THEN (SELECT default_trainer_name FROM training_catalog WHERE id = $3) END)
          ON CONFLICT (case_id, catalog_id) WHERE case_id IS NOT NULL DO NOTHING
          RETURNING id",
     )
@@ -292,9 +317,13 @@ pub async fn add_training(
     };
     let spec = task_for_training(&t.catalog_id.to_string(), &name);
     sqlx::query(
-        "INSERT INTO tasks (case_id, training_session_id, gen_key, role, title, due_date, owner_id, status, claimed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7::uuid IS NULL THEN 'a_faire' ELSE 'en_cours' END,
-                 CASE WHEN $7::uuid IS NULL THEN NULL ELSE now() END)
+        "INSERT INTO tasks (case_id, training_session_id, gen_key, role, title, due_date, owner_id, status, claimed_at,
+                            instructions, display_order)
+         SELECT $1, $2, $3, $4, $5,
+                CASE WHEN m.delay_days IS NOT NULL AND $6::date IS NOT NULL THEN $6::date + m.delay_days ELSE $6::date END,
+                $7, CASE WHEN $7::uuid IS NULL THEN 'a_faire' ELSE 'en_cours' END,
+                CASE WHEN $7::uuid IS NULL THEN NULL ELSE now() END, m.instructions, coalesce(m.display_order, 100)
+           FROM (SELECT 1) one LEFT JOIN task_templates m ON m.task_key = 'formation'
          ON CONFLICT (case_id, gen_key) DO NOTHING",
     )
     .bind(case_id)
@@ -335,6 +364,9 @@ async fn create_arrival(
     let key = idempotency::require_key(&headers)?;
     let input: ArrivalInput = serde_json::from_value(raw.clone())
         .map_err(|e| AppError::invalid("body", format!("saisie incomplète : {e}")))?;
+    for n in &input.needs {
+        need_open(&state.cfg(), n.category, n.answer)?;
+    }
     let first_name = required("first_name", &input.first_name, "prénom")?;
     let last_name = required("last_name", &input.last_name, "nom")?;
     let job_title = required("job_title", &input.job_title, "poste prévu")?;
@@ -374,6 +406,39 @@ async fn create_arrival(
             .await?
         }
     };
+    if let Some(ct) = input.contract_type.as_deref().filter(|c| !c.is_empty()) {
+        if !crate::routes::employees::CONTRACT_TYPES.contains(&ct) {
+            return Err(AppError::invalid("contract_type", "type de contrat inconnu"));
+        }
+    }
+    // Informations organisationnelles facultatives, sur une fiche nouvelle
+    // ou complétées sur une fiche existante choisie.
+    sqlx::query(
+        "UPDATE employees SET contract_type = coalesce(nullif($2, ''), contract_type) WHERE id = $1",
+    )
+    .bind(employee_id)
+    .bind(&input.contract_type)
+    .execute(&mut *tx)
+    .await?;
+    if input.employee_id.is_none() {
+        sqlx::query(
+            "UPDATE employee_positions SET job_profile_id = $2, manager_employee_id = $3,
+                    manager = coalesce(manager, (SELECT first_name || ' ' || last_name FROM employees WHERE id = $3))
+              WHERE employee_id = $1 AND valid_to IS NULL",
+        )
+        .bind(employee_id)
+        .bind(input.job_profile_id)
+        .bind(input.manager_employee_id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    for w in &input.wilaya_ids {
+        sqlx::query("INSERT INTO employee_wilayas (employee_id, wilaya_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+            .bind(employee_id)
+            .bind(w)
+            .execute(&mut *tx)
+            .await?;
+    }
     let site_name: String = sqlx::query_scalar("SELECT name FROM sites WHERE id = $1")
         .bind(input.site_id)
         .fetch_optional(&mut *tx)
@@ -395,12 +460,16 @@ async fn create_arrival(
 
     // Tous les besoins existent dès l'annonce ; non renseigné = à préciser.
     let mut needs: Vec<NeedInput> = Vec::new();
+    let mut profile_categories: Vec<NeedCategory> = Vec::new();
     for category in NeedCategory::ALL {
         let given = input.needs.iter().find(|n| n.category == *category);
         let mut n = match given {
             Some(dto) => dto.to_input(),
             None => NeedInput { category: *category, answer: NeedAnswer::APreciser, quantity: None, preference: None, detail: None },
         };
+        if given.and_then(|g| g.origin.as_deref()) == Some("profil") {
+            profile_categories.push(*category);
+        }
         if *category == NeedCategory::Formation && !input.trainings.is_empty() {
             n.answer = NeedAnswer::Oui;
         }
@@ -408,10 +477,18 @@ async fn create_arrival(
     }
     let mut lines_by_role: Vec<(Role, String)> = Vec::new();
     let mut tasks_created = 0;
+    let _ = &profile_categories;
     for n in &needs {
         let effect = apply_need(&mut tx, &user, case_id, n, Some(input.planned_arrival)).await?;
         if effect.task_created {
             tasks_created += 1;
+        }
+        if profile_categories.contains(&n.category) {
+            sqlx::query("UPDATE case_needs SET origin = 'profil' WHERE case_id = $1 AND category = $2")
+                .bind(case_id)
+                .bind(n.category.as_str())
+                .execute(&mut *tx)
+                .await?;
         }
         if n.answer == NeedAnswer::Oui && n.category != NeedCategory::Formation {
             lines_by_role.push((n.category.responsible_role(), describe_need(n)));
@@ -475,7 +552,7 @@ async fn create_arrival(
         "employee_id": employee_id,
         "visible_to": roles,
         "teams_without_recipient": without_recipient,
-        "mail_mode": state.config.mail_mode.as_str(),
+        "mail_mode": state.cfg().mail_mode.as_str(),
         "tasks_created": tasks_created,
     });
     idempotency::finish(&mut tx, user.id, &key, StatusCode::CREATED, &response).await?;
@@ -538,7 +615,7 @@ async fn list_cases(State(state): State<AppState>, user: CurrentUser, Query(q): 
                 (SELECT count(*) FROM tasks t WHERE t.case_id = c.id AND t.status = 'a_faire') AS unowned_tasks
            FROM cases c
            JOIN employees e ON e.id = c.employee_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE ($1::text IS NULL OR c.kind = $1)
             AND ($2::text IS NULL OR c.status = $2)
@@ -597,7 +674,7 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
            JOIN employees e ON e.id = c.employee_id
            JOIN users u ON u.id = c.created_by
            LEFT JOIN cases pc ON pc.id = c.parent_case_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE c.reference = upper($1) OR c.id::text = $1",
     )
@@ -630,12 +707,32 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
                     'id', n.id, 'category', n.category, 'answer', n.answer, 'quantity', n.quantity,
                     'preference', n.preference, 'detail', n.detail, 'revision', n.revision, 'updated_at', n.updated_at,
+                    'origin', n.origin,
+                    'delivered', (SELECT coalesce(sum(ml.quantity), 0) FROM movement_lines ml
+                                    JOIN movements m ON m.id = ml.movement_id LEFT JOIN assets a ON a.id = ml.asset_id
+                                   WHERE m.case_id = n.case_id AND m.kind = 'remise' AND (
+                                     (n.category = 'pc' AND a.kind IN ('pc_portable', 'pc_fixe'))
+                                     OR (n.category IN ('ecran', 'tablette', 'imprimante', 'telephone') AND a.kind = n.category)
+                                     OR (n.category = 'accessoire' AND ml.item_type = 'accessoire')
+                                     OR (n.category = 'sim' AND ml.item_type = 'sim'))),
+                    'delivered_items', (SELECT coalesce(jsonb_agg(ml.label || coalesce(' (' || ml.identifier || ')', '')
+                                          || CASE WHEN ml.quantity > 1 THEN ' × ' || ml.quantity ELSE '' END ORDER BY m.effective_at), '[]')
+                                    FROM movement_lines ml
+                                    JOIN movements m ON m.id = ml.movement_id LEFT JOIN assets a ON a.id = ml.asset_id
+                                   WHERE m.case_id = n.case_id AND m.kind = 'remise' AND (
+                                     (n.category = 'pc' AND a.kind IN ('pc_portable', 'pc_fixe'))
+                                     OR (n.category IN ('ecran', 'tablette', 'imprimante', 'telephone') AND a.kind = n.category)
+                                     OR (n.category = 'accessoire' AND ml.item_type = 'accessoire')
+                                     OR (n.category = 'sim' AND ml.item_type = 'sim'))),
+                    'delivered_kinds', (SELECT coalesce(jsonb_agg(DISTINCT a.kind), '[]') FROM movement_lines ml
+                                    JOIN movements m ON m.id = ml.movement_id JOIN assets a ON a.id = ml.asset_id
+                                   WHERE m.case_id = n.case_id AND m.kind = 'remise' AND n.category = 'pc' AND a.kind IN ('pc_portable', 'pc_fixe')),
                     'updated_by', u.display_name,
                     'history', (SELECT coalesce(jsonb_agg(jsonb_build_object('revision', r.revision, 'answer', r.answer,
                                       'preference', r.preference, 'quantity', r.quantity, 'detail', r.detail,
                                       'changed_at', r.changed_at) ORDER BY r.revision), '[]')
                                   FROM need_revisions r WHERE r.need_id = n.id))
-                    ORDER BY array_position(ARRAY['pc','telephone','sim','email_pro','xena','intelix','carte_visite','vehicule','formation'], n.category)), '[]')
+                    ORDER BY array_position(ARRAY['pc','ecran','tablette','imprimante','accessoire','telephone','sim','email_pro','xena','intelix','carte_visite','vehicule','formation'], n.category)), '[]')
            FROM case_needs n JOIN users u ON u.id = n.updated_by
           WHERE n.case_id = $1 AND n.category = ANY($2)",
     )
@@ -649,8 +746,11 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
                     'owner_id', t.owner_id, 'due_date', t.due_date, 'blocked_reason', t.blocked_reason,
                     'done_note', t.done_note, 'claimed_at', t.claimed_at, 'completed_at', t.completed_at,
                     'version', t.version, 'need_category', n.category,
-                    'resolution', t.resolution, 'resolution_evidence', t.resolution_evidence)
-                    ORDER BY t.role, t.created_at), '[]')
+                    'resolution', t.resolution, 'resolution_evidence', t.resolution_evidence,
+                    'training_session_id', t.training_session_id, 'exit_control_id', t.exit_control_id,
+                    'transfer_delta_id', t.transfer_delta_id, 'not_before', t.not_before, 'due_at', t.due_at,
+                    'escalated_at', t.escalated_at, 'instructions', t.instructions, 'display_order', t.display_order)
+                    ORDER BY t.role, t.display_order, t.created_at), '[]')
            FROM tasks t LEFT JOIN users o ON o.id = t.owner_id LEFT JOIN case_needs n ON n.id = t.need_id
           WHERE t.case_id = $1 AND ($2 OR t.role = ANY($3) OR t.owner_id = $4)",
     )
@@ -663,9 +763,11 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     let trainings: Value = if hr || user.has(Role::Formation) {
         sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
-                    'id', s.id, 'catalog_id', s.catalog_id, 'name', tc.name, 'status', s.status, 'trainer', u.display_name,
+                    'id', s.id, 'catalog_id', s.catalog_id, 'name', tc.name, 'status', s.status,
+                    'trainer', coalesce(s.trainer_name, u.display_name), 'recorded_by', rb.display_name,
                     'planned_date', s.planned_date, 'done_date', s.done_date, 'reason', s.reason) ORDER BY tc.name), '[]')
            FROM training_sessions s JOIN training_catalog tc ON tc.id = s.catalog_id LEFT JOIN users u ON u.id = s.trainer_id
+           LEFT JOIN users rb ON rb.id = s.recorded_by
           WHERE s.case_id = $1",
         )
         .bind(c.id)
@@ -738,10 +840,30 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     } else {
         json!([])
     };
+    // Mutation : comparaison et décisions pour le RH et l'ADMIN.
+    let transfer: Value = if hr && c.kind == "MUT" {
+        crate::routes::transfers::case_json(&mut conn, c.id).await?
+    } else {
+        Value::Null
+    };
+    // Départ : le motif privé reste au RH ; l'IT voit accès, licences et
+    // biens ; le véhicule relève du RH.
+    let departure: Value = if c.kind == "OFF" && (hr || it) {
+        let kinds: Vec<&str> = if hr {
+            vec!["compte", "licence", "bien", "vehicule", "donnees", "autre"]
+        } else {
+            vec!["compte", "licence", "bien", "donnees", "autre"]
+        };
+        crate::routes::departures::case_json(&mut conn, c.id, hr, &kinds, state.cfg().escalation_minutes).await?
+    } else {
+        Value::Null
+    };
     Ok(Json(json!({
         "scope": if hr { "complet" } else { "equipe" },
-        "mail_mode": state.config.mail_mode.as_str(),
+        "mail_mode": state.cfg().mail_mode.as_str(),
         "case": c,
+        "transfer": transfer,
+        "departure": departure,
         "needs": needs,
         "tasks": tasks,
         "trainings": trainings,
@@ -772,6 +894,9 @@ async fn update_needs(
     Json(input): Json<NeedsUpdate>,
 ) -> AppResult<Json<Value>> {
     user.require(domain::roles::HR_MANAGERS)?;
+    for n in &input.needs {
+        need_open(&state.cfg(), n.category, n.answer)?;
+    }
     let mut tx = state.pool.begin().await?;
     let row: Option<(String, String, i32, Uuid, Option<NaiveDate>)> = sqlx::query_as(
         "SELECT reference, status, version, employee_id, coalesce(due_date, effective_date) FROM cases WHERE id = $1 FOR UPDATE",
@@ -790,7 +915,7 @@ async fn update_needs(
     let mut lines: Vec<String> = Vec::new();
     let mut needs = input.needs.clone();
     if !input.trainings.is_empty() && !needs.iter().any(|n| n.category == NeedCategory::Formation) {
-        needs.push(NeedDto { category: NeedCategory::Formation, answer: NeedAnswer::Oui, quantity: None, preference: None, detail: None });
+        needs.push(NeedDto { category: NeedCategory::Formation, answer: NeedAnswer::Oui, quantity: None, preference: None, detail: None, origin: None });
     }
     for dto in &needs {
         let effect = apply_need(&mut tx, &user, case_id, &dto.to_input(), due).await?;
@@ -836,7 +961,7 @@ async fn update_needs(
         .await?;
     }
     tx.commit().await?;
-    Ok(Json(json!({ "version": version + 1, "visible_to": impacted, "mail_mode": state.config.mail_mode.as_str() })))
+    Ok(Json(json!({ "version": version + 1, "visible_to": impacted, "mail_mode": state.cfg().mail_mode.as_str() })))
 }
 
 // ------------------------------------------------------------------ M04 demande ponctuelle
@@ -866,6 +991,7 @@ async fn create_request(
     user.require(domain::roles::HR_MANAGERS)?;
     let input: RequestInput =
         serde_json::from_value(raw.clone()).map_err(|e| AppError::invalid("body", format!("saisie incomplète : {e}")))?;
+    need_open(&state.cfg(), input.category, NeedAnswer::Oui)?;
     let key = idempotency::key_from(&headers)?;
     let endpoint = format!("POST /employees/{employee_id}/requests");
     let mut tx = state.pool.begin().await?;
@@ -972,7 +1098,7 @@ async fn create_request(
     let without_recipient = audit::roles_without_recipient(&mut tx, &[role]).await?;
     let response = json!({
         "case_id": case_id, "reference": reference, "visible_to": [role],
-        "teams_without_recipient": without_recipient, "mail_mode": state.config.mail_mode.as_str(),
+        "teams_without_recipient": without_recipient, "mail_mode": state.cfg().mail_mode.as_str(),
     });
     if let Some(k) = &key {
         idempotency::finish(&mut tx, user.id, k, StatusCode::CREATED, &response).await?;
@@ -999,11 +1125,11 @@ async fn close_case(
 ) -> AppResult<Json<Value>> {
     user.require(domain::roles::HR_MANAGERS)?;
     let mut tx = state.pool.begin().await?;
-    let row: Option<(String, i32)> = sqlx::query_as("SELECT status, version FROM cases WHERE id = $1 FOR UPDATE")
+    let row: Option<(String, i32, String)> = sqlx::query_as("SELECT status, version, kind FROM cases WHERE id = $1 FOR UPDATE")
         .bind(case_id)
         .fetch_optional(&mut *tx)
         .await?;
-    let (status, version) = row.ok_or_else(|| AppError::not_found("dossier"))?;
+    let (status, version, kind) = row.ok_or_else(|| AppError::not_found("dossier"))?;
     if status != "ouvert" {
         return Err(AppError::conflict("dossier déjà clos ou annulé"));
     }
@@ -1025,6 +1151,50 @@ async fn close_case(
     .await?;
     let mut unresolved: Vec<String> = open_tasks.into_iter().map(|t| format!("Tâche ouverte : {t}")).collect();
     unresolved.extend(unsigned);
+    // Mutation : la nouvelle situation doit être appliquée.
+    if kind == "MUT" {
+        let t: Option<String> = sqlx::query_scalar("SELECT status FROM transfers WHERE case_id = $1").bind(case_id).fetch_optional(&mut *tx).await?;
+        if t.as_deref() != Some("appliquee") {
+            return Err(AppError::Conflict {
+                message: "la nouvelle situation n'est pas encore appliquée".into(),
+                detail: Some(json!({ "unresolved": [format!("Mutation : {}", t.unwrap_or_default())] })),
+            });
+        }
+    }
+    // Départ : un accès encore actif non autorisé empêche toute clôture ;
+    // les autres points non soldés relèvent d'une exception motivée.
+    if kind == "OFF" {
+        let d: Option<(String, Uuid)> = sqlx::query_as("SELECT status, id FROM departures WHERE case_id = $1").bind(case_id).fetch_optional(&mut *tx).await?;
+        if let Some((dstatus, did)) = d {
+            if dstatus == "planifie" {
+                return Err(AppError::Conflict {
+                    message: "la sortie administrative n'est pas encore effective".into(),
+                    detail: Some(json!({ "unresolved": ["Sortie administrative à venir"] })),
+                });
+            }
+            let access: Vec<String> = sqlx::query_scalar(
+                "SELECT 'Accès non confirmé coupé : ' || label FROM exit_controls WHERE departure_id = $1 AND kind = 'compte' AND state IN ('a_traiter', 'ecart') ORDER BY label",
+            )
+            .bind(did)
+            .fetch_all(&mut *tx)
+            .await?;
+            if !access.is_empty() {
+                return Err(AppError::Conflict { message: "des accès ne sont pas confirmés coupés".into(), detail: Some(json!({ "unresolved": access })) });
+            }
+            let others: Vec<String> = sqlx::query_scalar(
+                "SELECT CASE state WHEN 'ecart' THEN 'Écart non arbitré : ' ELSE 'Non soldé : ' END || label
+                   FROM exit_controls WHERE departure_id = $1 AND state IN ('a_traiter', 'ecart') ORDER BY label",
+            )
+            .bind(did)
+            .fetch_all(&mut *tx)
+            .await?;
+            for o in others {
+                if !unresolved.contains(&o) {
+                    unresolved.push(o);
+                }
+            }
+        }
+    }
     let exception = input.exception_reason.as_deref().and_then(domain::text::clean);
     if !unresolved.is_empty() {
         match &exception {

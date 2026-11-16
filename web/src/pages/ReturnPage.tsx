@@ -2,7 +2,7 @@ import { useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
-import { Empty, ErrorBox, Field, Loading, Notice, PageHeader, Section } from "../components";
+import { Empty, ErrorBox, Field, LegacyProof, Loading, Notice, PageHeader, Section } from "../components";
 import { useLoad, useUnsavedWarning } from "../hooks";
 import { fmtDateTime } from "../labels";
 import { DocumentActions } from "./DocumentActions";
@@ -104,6 +104,7 @@ export default function ReturnPage() {
                     <td className="small">
                       {h.origin_reference}
                       <div className="muted">{fmtDateTime(h.since)}</div>
+                      {h.reprise_note && <LegacyProof url={h.legacy_proof_url} reference={h.legacy_proof_ref} />}
                     </td>
                     <td className="num">
                       {h.item_type === "accessoire" && h.open_quantity > 1 ? (

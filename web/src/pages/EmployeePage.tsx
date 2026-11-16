@@ -2,11 +2,14 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHeader, Section } from "../components";
+import { Badge, EmployeePicker, Empty, ErrorBox, Field, LegacyProof, Loading, Modal, Notice, PageHeader, Section } from "../components";
 import { useCommand, useLoad } from "../hooks";
 import {
   caseKindLabel,
   caseStatusLabel,
+  contractTypeLabel,
+  DEPARTMENTS,
+  displayStatus,
   employeeStatusLabel,
   fmtDate,
   fmtDateTime,
@@ -17,14 +20,15 @@ import {
   sessionStatusLabel,
 } from "../labels";
 import { ConfirmArrivalDialog } from "./TaskDialogs";
+import { DepartureDialog, PositionCorrectionDialog, TransferDialog } from "./TransitionPanels";
 
 export default function EmployeePage() {
   const { id = "" } = useParams();
-  const { has } = useAuth();
+  const { has, on } = useAuth();
   const location = useLocation();
   const detail = useLoad(() => api<any>(`/employees/${id}`), [id]);
   const accounts = useLoad(() => (has("IT", "RH", "ADMIN") ? api<any[]>(`/employees/${id}/accounts`) : Promise.resolve([])), [id]);
-  const [dialog, setDialog] = useState<null | "request" | "edit" | "arrival">(null);
+  const [dialog, setDialog] = useState<null | "request" | "edit" | "arrival" | "org" | "mutation" | "depart" | "correction">(null);
 
   useEffect(() => {
     if (location.hash === "#comptes" && accounts.data) document.getElementById("comptes")?.scrollIntoView();
@@ -32,7 +36,9 @@ export default function EmployeePage() {
 
   if (detail.loading && !detail.data) return <Loading />;
   if (detail.error) return <ErrorBox error={detail.error} onRetry={detail.reload} />;
-  const { employee: e, positions, cases, holdings, trainings, contact, scope } = detail.data;
+  const { employee: e, positions, cases, holdings, trainings, contact, scope, licenses = [], vehicles = [] } = detail.data;
+  const openMut = cases.find((c: any) => c.kind === "MUT" && c.status === "ouvert");
+  const openOff = cases.find((c: any) => c.kind === "OFF" && c.status === "ouvert");
   const full = scope === "complet";
   const isIt = has("IT", "ADMIN");
   const isHr = has("RH", "ADMIN");
@@ -47,7 +53,7 @@ export default function EmployeePage() {
         }
         subtitle={
           <>
-            <Badge status={e.status} label={employeeStatusLabel[e.status]} /> · {e.job_title ?? "poste ?"} · {e.site_name ?? "site ?"}
+            <Badge status={displayStatus(e)} label={employeeStatusLabel[displayStatus(e)]} /> · {e.job_title ?? "poste ?"} · {e.site_name ?? "site ?"}
             {full && (e.matricule ? ` · matricule ${e.matricule}` : " · sans matricule")}
           </>
         }
@@ -68,9 +74,24 @@ export default function EmployeePage() {
                 Nouvelle demande
               </button>
             )}
+            {isHr && on("mutation") && e.status !== "sorti" && !openMut && !openOff && (
+              <button className="btn" onClick={() => setDialog("mutation")}>
+                Mutation
+              </button>
+            )}
+            {isHr && on("depart") && e.status !== "sorti" && !openOff && (
+              <button className="btn" onClick={() => setDialog("depart")}>
+                Départ
+              </button>
+            )}
             {isHr && (
               <button className="btn" onClick={() => setDialog("edit")}>
                 Modifier l'identité
+              </button>
+            )}
+            {isHr && (
+              <button className="btn" onClick={() => setDialog("org")}>
+                Informations RH
               </button>
             )}
             {isIt && e.status !== "sorti" && (
@@ -97,7 +118,47 @@ export default function EmployeePage() {
               <dt>Département</dt>
               <dd>{e.department ?? "—"}</dd>
               <dt>Manager</dt>
-              <dd>{e.manager ?? "—"}</dd>
+              <dd>
+                {e.manager_employee_id ? (
+                  <Link to={`/personnel/${e.manager_employee_id}`}>{e.manager_employee_name}</Link>
+                ) : e.manager ? (
+                  <>
+                    {e.manager} <span className="tag">à rattacher à une fiche</span>
+                  </>
+                ) : (
+                  "—"
+                )}
+              </dd>
+              {full && (
+                <>
+                  <dt>Contrat</dt>
+                  <dd>{e.contract_type ? contractTypeLabel[e.contract_type] : "—"}</dd>
+                  <dt>Profil de poste</dt>
+                  <dd>{e.job_profile_name ?? "—"}</dd>
+                  {e.poste_fixe && (
+                    <>
+                      <dt>« Poste fixe » (ancien champ)</dt>
+                      <dd>
+                        {e.poste_fixe} <span className="small muted">sens à confirmer</span>
+                      </dd>
+                    </>
+                  )}
+                  {e.leaving && (
+                    <>
+                      <dt>En départ</dt>
+                      <dd>sortie prévue le {fmtDate(e.planned_exit_date)}</dd>
+                    </>
+                  )}
+                  {e.import_note && (
+                    <>
+                      <dt>Remarque de reprise</dt>
+                      <dd className="small">{e.import_note}</dd>
+                    </>
+                  )}
+                  <dt>Wilayas</dt>
+                  <dd>{e.wilayas?.length ? e.wilayas.map((w: any) => `${w.code} ${w.name}`).join(", ") : "—"}</dd>
+                </>
+              )}
               {full && (
                 <>
                   <dt>Arrivée</dt>
@@ -115,8 +176,32 @@ export default function EmployeePage() {
                 <>
                   <dt>Email pro</dt>
                   <dd>{contact.email_pro ?? "non consigné"}</dd>
-                  <dt>Mobile pro</dt>
-                  <dd>{contact.mobile ?? "aucune ligne remise"}</dd>
+                  <dt>Lignes mobiles</dt>
+                  <dd>
+                    {(contact.lines ?? []).length === 0
+                      ? contact.mobile ?? "aucune ligne remise"
+                      : contact.lines.map((l: any) => (
+                          <div key={l.line_id}>
+                            {l.number} <span className="small muted">{l.operator}</span>{" "}
+                            {l.primary ? (
+                              <span className="tag">principale</span>
+                            ) : (
+                              (isHr || isIt) &&
+                              full && (
+                                <button
+                                  className="btn-link small"
+                                  onClick={async () => {
+                                    await api(`/employees/${e.id}/primary-line`, { body: { line_id: l.line_id } });
+                                    detail.reload();
+                                  }}
+                                >
+                                  définir comme principale
+                                </button>
+                              )
+                            )}
+                          </div>
+                        ))}
+                  </dd>
                 </>
               )}
               {e.exit_date && (
@@ -126,6 +211,21 @@ export default function EmployeePage() {
                 </>
               )}
             </dl>
+            {openMut && (
+              <Notice kind="info">
+                Mutation en cours : <Link to={`/dossiers/${openMut.reference}`}>{openMut.reference}</Link> (la situation ci-dessus reste celle en vigueur).
+              </Notice>
+            )}
+            {openOff && (
+              <Notice kind="warn">
+                Départ en cours : <Link to={`/dossiers/${openOff.reference}`}>{openOff.reference}</Link>
+              </Notice>
+            )}
+            {isHr && on("mutation") && e.status !== "sorti" && (
+              <button className="btn-link small" onClick={() => setDialog("correction")}>
+                Correction de poste datée…
+              </button>
+            )}
             {positions.length > 1 && (
               <details>
                 <summary>Historique du poste</summary>
@@ -165,6 +265,12 @@ export default function EmployeePage() {
                       </td>
                       <td className="small">
                         {h.origin_reference} · {fmtDateTime(h.since)}
+                        {h.reprise_note && (
+                          <>
+                            <div className="muted">{h.reprise_note}</div>
+                            <LegacyProof url={h.legacy_proof_url} reference={h.legacy_proof_ref} />
+                          </>
+                        )}
                         {h.case_reference && (
                           <>
                             {" "}
@@ -180,6 +286,33 @@ export default function EmployeePage() {
           </Section>
           )}
 
+          {full && on("logiciels") && licenses.length > 0 && (
+            <Section title="Licences logicielles">
+              <ul className="timeline">
+                {licenses.map((l: any) => (
+                  <li key={l.allocation_id}>
+                    <Link to={`/parc/logiciels/${l.subscription_id}`}>{l.label}</Link> · depuis {fmtDateTime(l.since)}
+                    {l.end_date && <span className="small muted"> · échéance {fmtDate(l.end_date)}</span>}
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+          {isHr && on("vehicules") && vehicles.length > 0 && (
+            <Section title="Véhicule confié">
+              <ul className="timeline">
+                {vehicles.map((v: any) => (
+                  <li key={v.assignment_id}>
+                    <Link to={`/vehicules/${v.vehicle_id}`} className="mono">
+                      {v.plate}
+                    </Link>{" "}
+                    {v.label} · depuis {fmtDateTime(v.since)} ({v.handover_reference})
+                  </li>
+                ))}
+              </ul>
+            </Section>
+          )}
+
           {(trainings.length > 0 || isHr) && (
           <Section title="Formations">
             {trainings.length === 0 ? (
@@ -190,6 +323,13 @@ export default function EmployeePage() {
                   <li key={t.id}>
                     {t.name} · <Badge status={t.status} label={sessionStatusLabel[t.status]} />
                     {t.done_date && ` le ${fmtDate(t.done_date)}`}
+                    {(t.trainer || t.recorded_by || t.reprise) && (
+                      <div className="small muted">
+                        {[t.trainer && `animée par ${t.trainer}`, t.recorded_by && `enregistrée par ${t.recorded_by}`, t.reprise && "reprise SharePoint"]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -237,6 +377,10 @@ export default function EmployeePage() {
         />
       )}
       {dialog === "edit" && <EditIdentityDialog employee={e} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); detail.reload(); }} />}
+      {dialog === "org" && <EditOrgDialog employee={e} onClose={() => setDialog(null)} onSaved={() => { setDialog(null); detail.reload(); }} />}
+      {dialog === "mutation" && <TransferDialog employee={e} onClose={() => setDialog(null)} />}
+      {dialog === "depart" && <DepartureDialog employee={e} onClose={() => setDialog(null)} />}
+      {dialog === "correction" && <PositionCorrectionDialog employee={e} onClose={() => setDialog(null)} onDone={() => { setDialog(null); detail.reload(); }} />}
     </>
   );
 }
@@ -287,7 +431,13 @@ function AccountsSection({ employee, accounts, canEdit, onChange }: { employee: 
                 <td className="mono small">{a.identifier}</td>
                 <td>
                   <Badge status={a.status === "coupe" ? "annule" : a.status === "a_verifier" ? "a_verifier" : "termine"} label={accountStatusLabel[a.status]} />
-                  <div className="small muted">vérifié {fmtDateTime(a.verified_at)}</div>
+                  <div className="small muted">
+                    {a.verified_at
+                      ? `vérifié ${fmtDateTime(a.verified_at)}`
+                      : a.imported
+                        ? "Adresse reprise — vérification non renseignée"
+                        : "vérification non renseignée"}
+                  </div>
                 </td>
                 <td>
                   {canEdit && a.status !== "coupe" && (
@@ -301,7 +451,7 @@ function AccountsSection({ employee, accounts, canEdit, onChange }: { employee: 
                       }}
                     >
                       <option value="">Confirmer…</option>
-                      {a.status !== "actif" && <option value="actif">Actif (vérifié)</option>}
+                      {(a.status !== "actif" || !a.verified_at) && <option value="actif">Actif (vérifié)</option>}
                       {a.status !== "a_verifier" && <option value="a_verifier">À vérifier</option>}
                       <option value="coupe">Coupure réalisée</option>
                     </select>
@@ -353,6 +503,7 @@ function AccountsSection({ employee, accounts, canEdit, onChange }: { employee: 
 /** M04 : demande ponctuelle autonome, une seule équipe sollicitée. */
 function RequestDialog({ employee, cases, onClose }: { employee: any; cases: any[]; onClose: () => void }) {
   const navigate = useNavigate();
+  const { on } = useAuth();
   const catalog = useLoad(() => api<any[]>("/trainings/catalog"), []);
   const [f, setF] = useState({ category: "carte_visite", detail: "", due_date: "", parent_case_id: "", preference: "", catalog_id: "" });
   const [key] = useState(newKey);
@@ -388,7 +539,7 @@ function RequestDialog({ employee, cases, onClose }: { employee: any; cases: any
       >
         <Field label="Besoin" required>
           <select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>
-            {NEED_CATEGORIES.map((c) => (
+            {NEED_CATEGORIES.filter((c) => c !== "vehicule" || on("vehicules")).map((c) => (
               <option key={c} value={c}>
                 {needLabel[c]} — {roleLabel[needTeam[c]]}
               </option>
@@ -488,6 +639,145 @@ function EditIdentityDialog({ employee, onClose, onSaved }: { employee: any; onC
         <Field label="Matricule" hint="Vider le champ efface le matricule (action tracée).">
           <input value={f.matricule} onChange={(e) => setF({ ...f, matricule: e.target.value })} />
         </Field>
+        <ErrorBox error={error} />
+        <div className="form-actions">
+          <button type="button" className="btn" onClick={onClose}>
+            Annuler
+          </button>
+          <button type="submit" className="btn btn-primary">
+            Enregistrer
+          </button>
+        </div>
+      </form>
+    </Modal>
+  );
+}
+
+/** Données RH de la situation en cours : poste, site, département, contrat,
+ *  poste fixe, wilayas, manager, profil. Une mutation (module MUT) reste le
+ *  chemin d'un changement de poste daté et préparé. */
+function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose: () => void; onSaved: () => void }) {
+  const wilayas = useLoad(() => api<any[]>("/wilayas"), []);
+  const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
+  const sites = useLoad(() => api<any[]>("/sites"), []);
+  const [f, setF] = useState({
+    job_title: employee.job_title ?? "",
+    site_id: employee.site_id ?? "",
+    leaving: !!employee.leaving,
+    planned_exit_date: employee.planned_exit_date ?? "",
+    contract_type: employee.contract_type ?? "",
+    poste_fixe: employee.poste_fixe ?? "",
+    department: employee.department ?? "",
+    job_profile_id: employee.job_profile_id ?? "",
+  });
+  const [selected, setSelected] = useState<string[]>((employee.wilayas ?? []).map((w: any) => w.id));
+  const [manager, setManager] = useState<{ id: string; name: string } | null>(
+    employee.manager_employee_id ? { id: employee.manager_employee_id, name: employee.manager_employee_name } : null,
+  );
+  const [error, setError] = useState<ApiError | null>(null);
+  const submit = async (ev: FormEvent) => {
+    ev.preventDefault();
+    try {
+      await api(`/employees/${employee.id}`, {
+        method: "PATCH",
+        body: {
+          version: employee.version,
+          job_title: f.job_title !== (employee.job_title ?? "") ? f.job_title : undefined,
+          site_id: f.site_id && f.site_id !== employee.site_id ? f.site_id : undefined,
+          contract_type: f.contract_type,
+          poste_fixe: f.poste_fixe,
+          leaving: f.leaving,
+          planned_exit_date: f.leaving ? f.planned_exit_date : "",
+          department: f.department,
+          job_profile_id: f.job_profile_id || null,
+          wilaya_ids: selected,
+          manager_employee_id: manager?.id ?? null,
+          clear_manager: !manager && !!employee.manager_employee_id,
+        },
+      });
+      onSaved();
+    } catch (err) {
+      setError(err as ApiError);
+    }
+  };
+  return (
+    <Modal title="Informations RH" onClose={onClose} wide>
+      <form onSubmit={submit}>
+        <div className="form-grid">
+          <Field label="Type de contrat">
+            <select value={f.contract_type} onChange={(e) => setF({ ...f, contract_type: e.target.value })}>
+              <option value="">—</option>
+              {Object.entries(contractTypeLabel).map(([k, l]) => (
+                <option key={k} value={k}>
+                  {l}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Poste" hint="Correction directe de la situation en cours (tracée dans l'historique de la fiche).">
+            <input value={f.job_title} onChange={(e) => setF({ ...f, job_title: e.target.value })} required />
+          </Field>
+          <Field label="Site">
+            <select value={f.site_id} onChange={(e) => setF({ ...f, site_id: e.target.value })} required>
+              <option value="">—</option>
+              {sites.data
+                ?.filter((s) => s.active || s.id === employee.site_id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+            </select>
+          </Field>
+          <Field label="« Poste fixe » (ancien champ, sens à confirmer)">
+            <input value={f.poste_fixe} onChange={(e) => setF({ ...f, poste_fixe: e.target.value })} />
+          </Field>
+          <Field label="Département">
+            <input list="departements-org" value={f.department} onChange={(e) => setF({ ...f, department: e.target.value })} />
+            <datalist id="departements-org">
+              {DEPARTMENTS.map((d) => (
+                <option key={d} value={d} />
+              ))}
+            </datalist>
+          </Field>
+          <Field label="Profil de poste">
+            <select value={f.job_profile_id} onChange={(e) => setF({ ...f, job_profile_id: e.target.value })}>
+              <option value="">—</option>
+              {profiles.data?.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </div>
+        <EmployeePicker value={manager} onChange={setManager} label="Manager (facultatif)" />
+        {employee.status !== "sorti" && (
+          <fieldset>
+            <legend>En départ</legend>
+            <label className="inline-choice">
+              <input type="checkbox" checked={f.leaving} onChange={(e) => setF({ ...f, leaving: e.target.checked })} /> La personne prépare sa sortie
+              (elle reste dans l'effectif ; aucun processus de départ n'est lancé)
+            </label>
+            {f.leaving && (
+              <Field label="Date de sortie prévue">
+                <input type="date" value={f.planned_exit_date} onChange={(e) => setF({ ...f, planned_exit_date: e.target.value })} />
+              </Field>
+            )}
+          </fieldset>
+        )}
+        <fieldset>
+          <legend>Wilayas couvertes</legend>
+          {wilayas.data?.length === 0 && <p className="small muted">Aucune wilaya au référentiel (Administration → Référentiels).</p>}
+          <div className="inline-choice" style={{ maxHeight: 180, overflowY: "auto" }}>
+            {wilayas.data?.filter((w) => w.active).map((w) => (
+              <label key={w.id}>
+                <input type="checkbox" checked={selected.includes(w.id)} onChange={(e) => setSelected(e.target.checked ? [...selected, w.id] : selected.filter((x) => x !== w.id))} />
+                {w.code} {w.name}
+              </label>
+            ))}
+          </div>
+        </fieldset>
         <ErrorBox error={error} />
         <div className="form-actions">
           <button type="button" className="btn" onClick={onClose}>

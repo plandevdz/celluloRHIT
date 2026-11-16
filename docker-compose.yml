@@ -33,13 +33,40 @@ services:
       DATABASE_PASSWORD: ${POSTGRES_PASSWORD}
       PUBLIC_URL: ${PUBLIC_URL:?définir PUBLIC_URL dans .env}
       COOKIE_SECURE: "true"
-      MAIL_MODE: journal
+      # Avis : « journal » (aucun envoi) tant qu'Exchange n'est pas raccordé.
+      MAIL_MODE: ${MAIL_MODE:-journal}
       MAIL_TEST_RECIPIENT: ${MAIL_TEST_RECIPIENT:-}
+      MAIL_ALLOWED_DOMAINS: ${MAIL_ALLOWED_DOMAINS:-}
+      MAIL_SENDER: ${MAIL_SENDER:-}
+      GRAPH_TENANT_ID: ${GRAPH_TENANT_ID:-}
+      GRAPH_CLIENT_ID: ${GRAPH_CLIENT_ID:-}
+      GRAPH_CERT_FILE: /run/celluloplast/graph-envoi.crt
+      GRAPH_KEY_FILE: /run/celluloplast/graph-envoi.key
+      # Archivage SharePoint : identité distincte de celle d'envoi.
+      ARCHIVE_MODE: ${ARCHIVE_MODE:-desactive}
+      ARCHIVE_TENANT_ID: ${ARCHIVE_TENANT_ID:-}
+      ARCHIVE_CLIENT_ID: ${ARCHIVE_CLIENT_ID:-}
+      ARCHIVE_CERT_FILE: /run/celluloplast/graph-archive.crt
+      ARCHIVE_KEY_FILE: /run/celluloplast/graph-archive.key
+      ARCHIVE_SITE_ID: ${ARCHIVE_SITE_ID:-}
+      ARCHIVE_DRIVE_ID: ${ARCHIVE_DRIVE_ID:-}
+      ARCHIVE_ROOT: ${ARCHIVE_ROOT:-Celluloplast}
+      ALERT_DAYS: ${ALERT_DAYS:-30}
+      ALERT_KM: ${ALERT_KM:-1000}
+      ESCALATION_MINUTES: ${ESCALATION_MINUTES:-60}
       SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-60}
       SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-10}
+      # Pilote : modules facultatifs fermés (menus masqués, routes refusées,
+      # traitements arrêtés). Non défini = « pilote » ; vide = tout ouvert.
+      MODULES_DESACTIVES: ${MODULES_DESACTIVES-pilote}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      CADDY_DATA_DIR: /caddy
     volumes:
       - documents:/var/lib/celluloplast
+      # Sauvegardes chiffrées (Administration → Sauvegardes), téléchargeables.
+      - backups:/var/lib/celluloplast-sauvegardes
+      # Certificats et clés Microsoft Graph (hors dépôt, chmod 600, uid 10001).
+      - ./secrets:/run/celluloplast:ro
     depends_on:
       db:
         condition: service_healthy
@@ -53,6 +80,11 @@ services:
     environment: *app_env
     volumes:
       - documents:/var/lib/celluloplast
+      - backups:/var/lib/celluloplast-sauvegardes
+      # Autorité de certification HTTPS : jointe aux sauvegardes si lisible.
+      - caddy_data:/caddy:ro
+      # Certificats et clés Microsoft Graph (hors dépôt, chmod 600, uid 10001).
+      - ./secrets:/run/celluloplast:ro
     depends_on:
       db:
         condition: service_healthy
@@ -80,6 +112,7 @@ services:
 volumes:
   pgdata:
   documents:
+  backups:
   caddy_data:
   caddy_config:
 

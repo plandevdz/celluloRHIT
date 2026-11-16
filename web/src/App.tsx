@@ -5,6 +5,10 @@ import { loginErrorMessage, useAuth } from "./auth";
 import { Field, Loading, Modal, Notice } from "./components";
 import { Role, roleLabel } from "./labels";
 import AdminPage from "./pages/AdminPage";
+import { RepriseBatchPage } from "./pages/AdminExtras";
+import EtatsPage from "./pages/EtatsPage";
+import { InventoryPage, SoftwarePage } from "./pages/ParcExtras";
+import VehiclesPage, { VehiclePage } from "./pages/VehiclesPage";
 import ArrivalPage from "./pages/ArrivalPage";
 import AssetPage from "./pages/AssetPage";
 import AssetsPage from "./pages/AssetsPage";
@@ -18,8 +22,21 @@ import { ImportBatchPage, ImportStartPage } from "./pages/ImportPage";
 import ReturnPage from "./pages/ReturnPage";
 import TrainingsPage from "./pages/TrainingsPage";
 import WorkPage from "./pages/WorkPage";
+import { ProfilesTab, WilayasTab } from "./pages/AdminExtras";
+import { PageHeader as RefHeader } from "./components";
 
-type NavItem = { to: string; label: string; roles?: Role[]; end?: boolean };
+/** Référentiels métier tenus par le RH : profils de poste et wilayas. */
+function ReferentialsPage() {
+  return (
+    <div className="stack">
+      <RefHeader title="Profils de poste et wilayas" subtitle="Référentiels du RH : modifiables ici, sans passer par l'administration." />
+      <ProfilesTab />
+      <WilayasTab />
+    </div>
+  );
+}
+
+type NavItem = { to: string; label: string; roles?: Role[]; end?: boolean; module?: string };
 
 // Seuls les espaces autorisés sont affichés (l'API contrôle de toute façon).
 const NAV: NavItem[] = [
@@ -28,7 +45,10 @@ const NAV: NavItem[] = [
   { to: "/dossiers", label: "Dossiers" },
   { to: "/personnel", label: "Personnel", roles: ["RH", "ADMIN", "IT"] },
   { to: "/parc", label: "Parc IT", roles: ["IT", "ADMIN"] },
+  { to: "/vehicules", label: "Véhicules", roles: ["RH", "ADMIN"], module: "vehicules" },
   { to: "/formations", label: "Formations", roles: ["FORMATION", "RH", "ADMIN"] },
+  { to: "/referentiels", label: "Profils et wilayas", roles: ["RH"] },
+  { to: "/etats", label: "États", roles: ["RH", "ADMIN", "IT"], module: "etats" },
   { to: "/administration", label: "Administration", roles: ["ADMIN"] },
 ];
 
@@ -88,7 +108,14 @@ export default function App() {
           <Route path="/parc/actifs/:id" element={<AssetPage />} />
           <Route path="/parc/remise" element={<HandoverPage />} />
           <Route path="/parc/restitution" element={<ReturnPage />} />
+          <Route path="/parc/logiciels/:id" element={<ModuleRoute module="logiciels"><SoftwarePage /></ModuleRoute>} />
+          <Route path="/parc/inventaires/:id" element={<ModuleRoute module="inventaire"><InventoryPage /></ModuleRoute>} />
+          <Route path="/vehicules" element={<ModuleRoute module="vehicules"><VehiclesPage /></ModuleRoute>} />
+          <Route path="/vehicules/:id" element={<ModuleRoute module="vehicules"><VehiclePage /></ModuleRoute>} />
+          <Route path="/etats" element={<ModuleRoute module="etats"><EtatsPage /></ModuleRoute>} />
+          <Route path="/administration/reprise/:id" element={<RepriseBatchPage />} />
           <Route path="/formations" element={<TrainingsPage />} />
+          <Route path="/referentiels" element={<ReferentialsPage />} />
           <Route path="/administration" element={<AdminPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
@@ -98,13 +125,26 @@ export default function App() {
   );
 }
 
+/** Page d'un module fermé (pilote) : lien direct ou ancien favori. */
+function ModuleRoute({ module, children }: { module: string; children: JSX.Element }) {
+  const { on } = useAuth();
+  if (on(module)) return children;
+  return (
+    <div className="empty-state">
+      <h1>Fonction non ouverte</h1>
+      <p>Cette fonction n'est pas disponible dans la version pilote de l'application.</p>
+      <Link to="/">Retour à l'accueil</Link>
+    </div>
+  );
+}
+
 function HomeRoute() {
   const { has } = useAuth();
   return has("RH", "ADMIN") ? <HomePage /> : <Navigate to="/travail" replace />;
 }
 
 function TopBar() {
-  const { user, has, logout } = useAuth();
+  const { user, has, on, logout } = useAuth();
   const navigate = useNavigate();
   if (!user) return null;
   return (
@@ -113,7 +153,7 @@ function TopBar() {
         Celluloplast<small>Parcours salarié</small>
       </Link>
       <nav className="nav" aria-label="Navigation principale">
-        {NAV.filter((n) => !n.roles || has(...n.roles)).map((n) => (
+        {NAV.filter((n) => (!n.roles || has(...n.roles)) && (!n.module || on(n.module))).map((n) => (
           <NavLink key={n.to} to={n.to} end={n.end}>
             {n.label}
           </NavLink>

@@ -20,8 +20,14 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/users/{id}/activation", post(reset_activation))
         .route("/sites", get(list_sites))
         .route("/admin/sites", post(create_site))
+        .route("/admin/sites/{id}", patch(update_site))
         .route("/admin/sites/{id}/locations", post(create_location))
+        .route("/admin/locations/{id}", patch(update_location))
         .route("/admin/notifications", get(list_notifications))
+        .route("/admin/deliveries/{id}/retry", post(retry_delivery))
+        .route("/admin/archive", get(archive_status))
+        .route("/admin/archive/{id}/retry", post(retry_archive))
+        .route("/admin/settings", get(settings))
         .route("/users/directory", get(directory))
 }
 
@@ -62,7 +68,7 @@ struct CreateUser {
 }
 
 fn activation_link(state: &AppState, token: &str) -> String {
-    format!("{}/activation?token={}", state.config.public_url.trim_end_matches('/'), token)
+    format!("{}/activation?token={}", state.cfg().public_url.trim_end_matches('/'), token)
 }
 
 /// Crée un compte nominatif. Le lien d'activation à usage unique est rendu
@@ -282,6 +288,71 @@ async fn create_site(State(state): State<AppState>, user: CurrentUser, Json(inpu
 }
 
 #[derive(Deserialize)]
+struct UpdateSite {
+    name: Option<String>,
+    code: Option<String>,
+    active: Option<bool>,
+}
+
+/// Renommer ou fermer un site (jamais supprimé : des fiches y sont rattachées).
+async fn update_site(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<UpdateSite>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin])?;
+    let name = match &i.name {
+        Some(n) => Some(domain::text::clean(n).ok_or_else(|| AppError::invalid("name", "nom obligatoire"))?),
+        None => None,
+    };
+    let code = match &i.code {
+        Some(c) => Some(domain::text::clean(c).ok_or_else(|| AppError::invalid("code", "code obligatoire"))?.to_uppercase()),
+        None => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query(
+        "UPDATE sites SET name = coalesce($2, name), code = coalesce($3, code), active = coalesce($4, active), updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&name)
+    .bind(&code)
+    .bind(i.active)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("site"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "site_modifie", entity: "site", entity_id: Some(id), data: Some(json!({ "nom": name, "code": code, "actif": i.active })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct UpdateLocation {
+    name: Option<String>,
+    active: Option<bool>,
+}
+
+async fn update_location(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<UpdateLocation>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin, Role::It])?;
+    let name = match &i.name {
+        Some(n) => Some(domain::text::clean(n).ok_or_else(|| AppError::invalid("name", "nom obligatoire"))?),
+        None => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query("UPDATE locations SET name = coalesce($2, name), active = coalesce($3, active) WHERE id = $1")
+        .bind(id)
+        .bind(&name)
+        .bind(i.active)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("local"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "local_modifie", entity: "location", entity_id: Some(id), data: Some(json!({ "nom": name, "actif": i.active })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 struct CreateLocation {
     name: String,
 }
@@ -317,6 +388,7 @@ struct NotificationRow {
     case_reference: Option<String>,
     target: String,
     subject: String,
+    body: String,
     outbox_status: String,
     outbox_error: Option<String>,
     missing_roles: Vec<String>,
@@ -335,9 +407,10 @@ async fn list_notifications(
         "SELECT o.id AS outbox_id, o.event_type, c.reference AS case_reference,
                 array_to_string(o.target_roles || (SELECT coalesce(array_agg(u.display_name), '{}') FROM users u
                                                     WHERE u.id = ANY(o.target_user_ids)), ', ') AS target,
-                o.subject, o.status AS outbox_status, o.last_error AS outbox_error, o.missing_roles, o.created_at,
+                o.subject, o.body, o.status AS outbox_status, o.last_error AS outbox_error, o.missing_roles, o.created_at,
                 coalesce(jsonb_agg(jsonb_build_object(
-                    'recipient', d.recipient_email, 'sent_to', d.sent_to, 'status', d.status,
+                    'id', d.id, 'recipient', d.recipient_email, 'sent_to', d.sent_to, 'status', d.status,
+                    'retried_reason', d.retried_reason,
                     'attempts', d.attempts, 'last_result', d.last_result, 'last_attempt_at', d.last_attempt_at)
                     ORDER BY d.recipient_email) FILTER (WHERE d.id IS NOT NULL), '[]') AS deliveries
            FROM outbox o
@@ -382,4 +455,91 @@ async fn directory(
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
+}
+
+#[derive(Deserialize)]
+struct RetryInput {
+    reason: String,
+}
+
+/// Reprise motivée d'un avis en échec ou au résultat inconnu (après
+/// vérification) : jamais de réexpédition automatique d'un « à vérifier ».
+async fn retry_delivery(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<RetryInput>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin])?;
+    let reason = domain::text::clean(&i.reason).ok_or_else(|| AppError::invalid("reason", "motif de la reprise obligatoire"))?;
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query(
+        "UPDATE deliveries SET status = 'en_attente', next_attempt_at = now(), lease_until = NULL, retried_by = $2, retried_reason = $3
+          WHERE id = $1 AND status IN ('echec', 'a_verifier')",
+    )
+    .bind(id)
+    .bind(user.id)
+    .bind(&reason)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        return Err(AppError::conflict("seul un avis en échec ou à vérifier peut être repris"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "avis_repris", entity: "delivery", entity_id: Some(id), data: Some(json!({ "motif": reason })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "status": "en_attente" })))
+}
+
+/// Suivi de l'archivage SharePoint : compteurs et documents en attente ou
+/// en échec.
+async fn archive_status(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin])?;
+    let v: Value = sqlx::query_scalar(
+        "SELECT jsonb_build_object(
+            'mode', $1::text,
+            'counts', (SELECT coalesce(jsonb_object_agg(archive_status, n), '{}') FROM (SELECT archive_status, count(*) n FROM document_versions GROUP BY archive_status) t),
+            'items', (SELECT coalesce(jsonb_agg(jsonb_build_object('id', v.id, 'file_kind', v.file_kind, 'version', v.version, 'path', v.storage_path,
+                        'status', v.archive_status, 'error', v.archive_error, 'attempts', v.archive_attempts, 'next_at', v.archive_next_at,
+                        'movement', m.reference) ORDER BY v.created_at DESC), '[]')
+                        FROM (SELECT * FROM document_versions WHERE archive_status IN ('en_attente', 'echec') ORDER BY created_at DESC LIMIT 100) v
+                        JOIN documents d ON d.id = v.document_id JOIN movements m ON m.id = d.movement_id))",
+    )
+    .bind(state.cfg().archive_mode.as_str())
+    .fetch_one(&state.pool)
+    .await?;
+    Ok(Json(v))
+}
+
+async fn retry_archive(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin])?;
+    if state.cfg().archive_mode == crate::config::ArchiveMode::Desactive {
+        return Err(AppError::conflict("archivage SharePoint désactivé sur ce serveur"));
+    }
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query("UPDATE document_versions SET archive_status = 'en_attente', archive_next_at = now() WHERE id = $1 AND archive_status = 'echec'")
+        .bind(id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(AppError::conflict("seul un archivage en échec peut être relancé"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "archivage_relance", entity: "document_version", entity_id: Some(id), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "status": "en_attente" })))
+}
+
+/// Paramètres d'exploitation visibles (sans aucun secret).
+async fn settings(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin])?;
+    let c = state.cfg();
+    Ok(Json(json!({
+        "mail_mode": c.mail_mode.as_str(),
+        "mail_sender": c.mail_sender,
+        "mail_test_recipient": c.mail_test_recipient,
+        "mail_allowed_domains": c.mail_allowed_domains,
+        "archive_mode": c.archive_mode.as_str(),
+        "archive_root": c.archive_target.as_ref().map(|t| t.root.clone()),
+        "alert_days": c.alert_days,
+        "alert_km": c.alert_km,
+        "escalation_minutes": c.escalation_minutes,
+        "public_url": c.public_url,
+        "version": crate::VERSION,
+    })))
 }

@@ -1,5 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
-import { ApiError } from "./api";
+import { api, ApiError } from "./api";
 
 export function PageHeader({ title, subtitle, actions }: { title: ReactNode; subtitle?: ReactNode; actions?: ReactNode }) {
   return (
@@ -24,6 +24,7 @@ const tone: Record<string, string> = {
   annule_case: "muted",
   a_venir: "info",
   actif: "ok",
+  en_depart: "warn",
   sorti: "muted",
   disponible: "ok",
   reserve: "info",
@@ -50,6 +51,54 @@ const tone: Record<string, string> = {
   oui: "ok",
   non: "muted",
   a_preciser: "warn",
+  en_service: "info",
+  immobilise: "warn",
+  rendu_loueur: "muted",
+  brouillon: "info",
+  confirmee: "info",
+  appliquee: "ok",
+  suspendue: "danger",
+  planifie: "info",
+  sortie_effective: "ok",
+  a_traiter: "warn",
+  fait: "ok",
+  ecart: "danger",
+  perte: "muted",
+  non_applicable: "muted",
+  vu: "ok",
+  ailleurs: "warn",
+  hors_perimetre: "warn",
+  inconnu: "danger",
+  doublon: "muted",
+  archive: "ok",
+  desactive: "muted",
+  creation: "info",
+  mise_a_jour: "info",
+  inchange: "muted",
+  a_revoir: "warn",
+  rejet: "danger",
+  cree: "ok",
+  mis_a_jour: "ok",
+  ignore: "muted",
+  conflit: "danger",
+  rejete: "danger",
+  ouverte: "info",
+  close: "ok",
+  renouvele: "muted",
+  restitue: "muted",
+  active: "ok",
+  resiliee: "muted",
+  conserver: "ok",
+  ajouter: "info",
+  reprendre: "warn",
+  verifier: "warn",
+  reussie: "ok",
+  demande: "info",
+  ok: "ok",
+  info: "info",
+  warn: "warn",
+  danger: "danger",
+  muted: "muted",
 };
 
 /** Pastille d'état : toujours un texte, la couleur n'est qu'un renfort. */
@@ -223,4 +272,107 @@ export function Pager({ page, hasNext, onPage }: { page: number; hasNext: boolea
       </button>
     </div>
   );
+}
+
+/** Recherche d'un salarié par nom ou matricule (RH, ADMIN, IT). */
+export function EmployeePicker({
+  value,
+  onChange,
+  label = "Salarié",
+  required,
+  excludeOut = true,
+}: {
+  value: { id: string; name: string } | null;
+  onChange: (v: { id: string; name: string } | null) => void;
+  label?: string;
+  required?: boolean;
+  excludeOut?: boolean;
+}) {
+  const [q, setQ] = useState("");
+  const [items, setItems] = useState<any[]>([]);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    const term = q.trim();
+    if (term.length < 2) {
+      setItems([]);
+      return;
+    }
+    const t = window.setTimeout(async () => {
+      try {
+        const r = await api<{ items: any[] }>(`/employees?q=${encodeURIComponent(term)}`);
+        setItems(r.items.filter((e) => !excludeOut || e.status !== "sorti").slice(0, 8));
+        setError(null);
+      } catch (e) {
+        setError((e as ApiError).message);
+      }
+    }, 250);
+    return () => window.clearTimeout(t);
+  }, [q, excludeOut]);
+  if (value) {
+    return (
+      <div className="field">
+        <span className="field-label">{label}</span>
+        <div className="row">
+          <strong dir="auto">{value.name}</strong>
+          <button type="button" className="btn btn-small" onClick={() => onChange(null)}>
+            Changer
+          </button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="field">
+      <span className="field-label">
+        {label}
+        {required && <span className="req" aria-hidden="true"> *</span>}
+      </span>
+      <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Nom ou matricule (2 caractères au moins)" aria-label={label} dir="auto" />
+      {error && <span className="field-msg">{error}</span>}
+      {items.length > 0 && (
+        <ul className="picker-list">
+          {items.map((e) => (
+            <li key={e.id}>
+              <button type="button" className="btn-link" onClick={() => onChange({ id: e.id, name: `${e.first_name} ${e.last_name}` })} dir="auto">
+                {e.first_name} {e.last_name}
+              </button>{" "}
+              <span className="small muted">
+                {e.matricule ?? "sans matricule"} · {e.job_title ?? "—"} · {e.site_name ?? "—"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+/** Onglets dont l'état est conservé dans l'URL (?onglet=). */
+export function Tabs({ tabs, current, onSelect }: { tabs: { id: string; label: string }[]; current: string; onSelect: (id: string) => void }) {
+  return (
+    <div className="row" role="tablist" style={{ marginBottom: "1rem" }}>
+      {tabs.map((t) => (
+        <button key={t.id} role="tab" aria-selected={current === t.id} className={`btn ${current === t.id ? "btn-primary" : ""}`} onClick={() => onSelect(t.id)}>
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** Garde reprise de SharePoint : jamais « signé » sans preuve identifiée,
+ *  jamais de PDF régénéré. Réservé aux vues RH, ADMIN et IT. */
+export function LegacyProof({ url, reference }: { url?: string | null; reference?: string | null }) {
+  if (url) {
+    return (
+      <div className="small">
+        Justificatif dans SharePoint :{" "}
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          ouvrir l'ancien document
+        </a>
+      </div>
+    );
+  }
+  if (reference) return <div className="small">Justificatif dans SharePoint : {reference}</div>;
+  return <div className="small">Remise reprise de SharePoint — justificatif à rechercher dans l'ancien système</div>;
 }

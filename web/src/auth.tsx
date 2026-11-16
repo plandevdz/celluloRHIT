@@ -9,6 +9,9 @@ type AuthState = {
   loading: boolean;
   expired: boolean;
   has: (...roles: Role[]) => boolean;
+  /** Module facultatif ouvert ? (pilote : véhicules, logiciels, inventaire,
+   *  mutation, depart, etats). Masqué tant que la configuration n'est pas lue. */
+  on: (module: string) => boolean;
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
 };
@@ -19,8 +22,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Me | null>(null);
   const [loading, setLoading] = useState(true);
   const [expired, setExpired] = useState(false);
+  const [disabled, setDisabled] = useState<string[] | null>(null);
 
   useEffect(() => {
+    api<{ modules_desactives?: string[] }>("/health")
+      .then((h) => setDisabled(h.modules_desactives ?? []))
+      .catch(() => setDisabled(null));
     api<Me>("/auth/me")
       .then(setUser)
       .catch(() => setUser(null))
@@ -48,9 +55,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const has = useCallback((...roles: Role[]) => !!user && roles.some((r) => user.roles.includes(r)), [user]);
+  const on = useCallback((module: string) => disabled !== null && !disabled.includes(module), [disabled]);
 
   return (
-    <AuthContext.Provider value={{ user, loading, expired, has, login, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, loading, expired, has, on, login, logout }}>{children}</AuthContext.Provider>
   );
 }
 

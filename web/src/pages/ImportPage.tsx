@@ -10,8 +10,8 @@ const proposalLabel: Record<string, string> = {
   creation: "Création",
   mise_a_jour: "Mise à jour",
   inchange: "Inchangée",
-  a_revoir: "À revoir",
-  rejet: "Rejetée",
+  a_revoir: "Conflit à arbitrer",
+  rejet: "Erreur (rejetée)",
 };
 const proposalTone: Record<string, string> = {
   creation: "info",
@@ -71,6 +71,10 @@ export function ImportStartPage() {
             <li>ID salarié et Matricule sont du texte (les zéros initiaux sont conservés). Le matricule est facultatif.</li>
             <li>Nouvelle fiche : Prénom, Nom, Poste, Site et Date d'arrivée obligatoires. Mise à jour : une case vide conserve la valeur actuelle.</li>
             <li>Pas de formule, de salaire, de pièce RH ni de mot de passe.</li>
+            <li>
+              Colonnes facultatives : Contrat, Profil de poste, Manager (matricule ou ID salarié — jamais le nom seul), Wilayas (codes séparés par
+              « ; », « aucune » pour les retirer). Les anciens classeurs à 8 colonnes restent acceptés : rien n'est effacé.
+            </li>
           </ul>
           <button className="btn btn-primary" disabled={busy} onClick={() => input.current?.click()}>
             {busy ? "Analyse…" : "Choisir un fichier .xlsx"}
@@ -181,9 +185,9 @@ export function ImportBatchPage() {
           ["creation", "Créations"],
           ["mise_a_jour", "Mises à jour"],
           ["inchange", "Inchangées"],
-          ["a_revoir", "À revoir"],
+          ["a_revoir", "Conflits à arbitrer"],
           ["exclu", "Exclues"],
-          ["rejet", "Rejetées"],
+          ["rejet", "Erreurs (rejetées)"],
         ].map(([k, l]) => (
           <div className="stat" key={k}>
             <div className="value">{plan[k] ?? 0}</div>

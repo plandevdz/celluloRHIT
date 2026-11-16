@@ -24,6 +24,9 @@ text_enum! {
         Disponible => "disponible",
         Reserve => "reserve",
         Affecte => "affecte",
+        /// Matériel partagé en place (serveur, imprimante, réseau) : ni en
+        /// stock ni remis à une personne.
+        EnService => "en_service",
         Controle => "controle",
         Reparation => "reparation",
         Reforme => "reforme",
@@ -35,8 +38,17 @@ text_enum! {
         PcPortable => "pc_portable",
         PcFixe => "pc_fixe",
         Telephone => "telephone",
+        Tablette => "tablette",
         Ecran => "ecran",
         Imprimante => "imprimante",
+        Scanner => "scanner",
+        Serveur => "serveur",
+        Onduleur => "onduleur",
+        Reseau => "reseau",
+        Pointeuse => "pointeuse",
+        Videoprojecteur => "videoprojecteur",
+        Destructeur => "destructeur",
+        Videosurveillance => "videosurveillance",
         Autre => "autre",
     }
 }
@@ -47,8 +59,17 @@ impl AssetKind {
             AssetKind::PcPortable => "PC portable",
             AssetKind::PcFixe => "PC fixe",
             AssetKind::Telephone => "Téléphone",
+            AssetKind::Tablette => "Tablette",
             AssetKind::Ecran => "Écran",
             AssetKind::Imprimante => "Imprimante",
+            AssetKind::Scanner => "Scanner",
+            AssetKind::Serveur => "Serveur",
+            AssetKind::Onduleur => "Onduleur",
+            AssetKind::Reseau => "Réseau",
+            AssetKind::Pointeuse => "Pointeuse",
+            AssetKind::Videoprojecteur => "Vidéoprojecteur",
+            AssetKind::Destructeur => "Destructeur",
+            AssetKind::Videosurveillance => "Vidéosurveillance",
             AssetKind::Autre => "Autre",
         }
     }

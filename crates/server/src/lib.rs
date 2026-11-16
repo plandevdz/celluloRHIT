@@ -2,15 +2,21 @@
 
 pub mod audit;
 pub mod auth;
+pub mod backup;
+pub mod certs;
 pub mod config;
 pub mod documents;
 pub mod error;
+pub mod graph;
 pub mod idempotency;
+pub mod labels;
 pub mod pdf;
 pub mod personnel_xlsx;
 pub mod routes;
 pub mod seed;
+pub mod settings;
 pub mod state;
+pub mod tabular;
 pub mod worker;
 
 use std::time::Duration;
@@ -36,7 +42,7 @@ const CSP: &str = "default-src 'self'; img-src 'self' data: blob:; style-src 'se
 /// Application complète : API sous /api/v1, interface web statique ailleurs
 /// (toute route inconnue renvoie index.html pour le routage côté navigateur).
 pub fn app(state: AppState) -> Router {
-    let web_dir = state.config.web_dir.clone();
+    let web_dir = state.cfg().web_dir.clone();
     let api = routes::api_router(&state).layer(SetResponseHeaderLayer::overriding(
         header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),

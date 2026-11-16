@@ -140,7 +140,7 @@ async fn r02_r06_remise_substituee_et_restitution_partielle(pool: PgPool) {
 
     // PDF d'affectation à trois lignes.
     let doc_id: Uuid = serde_json::from_value(remise["document_id"].clone()).unwrap();
-    server::documents::ensure_original(app.pool(), &app.state.config, doc_id).await.unwrap();
+    server::documents::ensure_original(app.pool(), &app.state.cfg(), doc_id).await.unwrap();
     let req = Request::builder()
         .uri(format!("/api/v1/documents/{doc_id}/original"))
         .header(header::COOKIE, &it.cookie)
@@ -192,7 +192,7 @@ async fn r02_r06_remise_substituee_et_restitution_partielle(pool: PgPool) {
     .await
     .unwrap();
     assert_eq!(origin_ref, remise["reference"].as_str().map(String::from));
-    server::documents::ensure_original(app.pool(), &app.state.config, rdoc).await.unwrap();
+    server::documents::ensure_original(app.pool(), &app.state.cfg(), rdoc).await.unwrap();
     let doc_status: String = sqlx::query_scalar("SELECT status FROM documents WHERE id = $1").bind(rdoc).fetch_one(app.pool()).await.unwrap();
     assert_eq!(doc_status, "genere", "imprimé n'est pas signé");
 

@@ -1,6 +1,7 @@
 import { api } from "../api";
 import { useLoad } from "../hooks";
-import { answerLabel, NEED_CATEGORIES, needLabel, needTeam, roleLabel } from "../labels";
+import { useAuth } from "../auth";
+import { answerLabel, EQUIPMENT_NEEDS, NEED_CATEGORIES, needLabel, needTeam, roleLabel } from "../labels";
 
 export type NeedValue = {
   category: string;
@@ -8,6 +9,8 @@ export type NeedValue = {
   preference?: string | null;
   quantity?: number | null;
   detail?: string | null;
+  /** « profil » : valeur suggérée par le profil de poste, non retouchée. */
+  origin?: string | null;
 };
 
 export type TrainingValue = { catalog_id: string; trainer_id?: string | null };
@@ -32,9 +35,11 @@ export function NeedsEditor({
   onTrainings: (t: TrainingValue[]) => void;
   existingTrainingIds?: string[];
 }) {
+  const { on } = useAuth();
   const catalog = useLoad(() => api<{ id: string; name: string; active: boolean }[]>("/trainings/catalog"), []);
   const trainers = useLoad(() => api<{ id: string; display_name: string }[]>("/users/directory?role=FORMATION"), []);
-  const set = (c: string, patch: Partial<NeedValue>) => onChange({ ...needs, [c]: { ...needs[c], ...patch } });
+  // Toute retouche par le RH fait de la valeur une saisie RH.
+  const set = (c: string, patch: Partial<NeedValue>) => onChange({ ...needs, [c]: { ...needs[c], ...patch, origin: null } });
 
   return (
     <div>
@@ -49,12 +54,13 @@ export function NeedsEditor({
             </tr>
           </thead>
           <tbody>
-            {NEED_CATEGORIES.filter((c) => c !== "formation").map((c) => {
+            {NEED_CATEGORIES.filter((c) => c !== "formation" && (c !== "vehicule" || on("vehicules"))).map((c) => {
               const n = needs[c];
               return (
                 <tr key={c}>
                   <td>
                     <strong>{needLabel[c]}</strong>
+                    {n.origin === "profil" && <div className="small muted">suggéré par le profil</div>}
                   </td>
                   <td className="small muted">{roleLabel[needTeam[c]]}</td>
                   <td>
@@ -69,6 +75,19 @@ export function NeedsEditor({
                   </td>
                   <td>
                     <div className="row">
+                      {EQUIPMENT_NEEDS.includes(c) && n.answer === "oui" && (
+                        <input
+                          type="number"
+                          min={1}
+                          max={999}
+                          aria-label={`Quantité ${needLabel[c]}`}
+                          title="Quantité"
+                          placeholder="Qté"
+                          value={n.quantity ?? ""}
+                          onChange={(e) => set(c, { quantity: e.target.value ? Number(e.target.value) : null })}
+                          style={{ width: 70 }}
+                        />
+                      )}
                       {c === "pc" && (
                         <select
                           aria-label="Préférence de PC"
@@ -97,6 +116,7 @@ export function NeedsEditor({
         </table>
       </div>
       <p className="small muted">
+        Téléphone, SIM et ligne sont distincts : une recrue peut recevoir une SIM sans nouveau téléphone. Quantité vide = 1.
         L'IT choisit la plateforme email (cPanel ou Microsoft 365) et peut remplacer le PC préféré selon le stock, en le
         justifiant. Une réponse non renseignée reste « à préciser ».
       </p>
@@ -164,5 +184,6 @@ export function needsPayload(needs: Record<string, NeedValue>): NeedValue[] {
     preference: n.category === "pc" ? n.preference || null : null,
     quantity: n.quantity || null,
     detail: n.detail?.trim() || null,
+    origin: n.origin ?? null,
   }));
 }

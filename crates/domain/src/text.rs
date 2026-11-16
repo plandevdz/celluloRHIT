@@ -36,7 +36,7 @@ pub fn name_key(first_name: &str, last_name: &str) -> String {
     words.join(" ")
 }
 
-fn fold_char(c: char) -> char {
+pub(crate) fn fold_char(c: char) -> char {
     match c {
         'à' | 'â' | 'ä' | 'á' | 'ã' | 'À' | 'Â' | 'Ä' | 'Á' => 'a',
         'é' | 'è' | 'ê' | 'ë' | 'É' | 'È' | 'Ê' | 'Ë' => 'e',

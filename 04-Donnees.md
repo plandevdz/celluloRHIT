@@ -24,6 +24,7 @@ Contrat pour le développeur : matérialiser les relations par clés étrangère
 | inventory_campaigns, inventory_expected | campagne, site, période, état ; photographie initiale : actif, emplacement attendu, détenteur si autorisé | IT. Le périmètre et la date de référence restent reproductibles ; identifier mouvements postérieurs. |
 | inventory_observations, inventory_discrepancies | campagne, actif reconnu ou code inconnu, local, heure, opérateur ; type d’écart, arbitrage et action liée | Clé de commande pour le rejeu ; pointage utile unique par actif/local/campagne. Deux locaux = conflit à examiner, jamais double présence validée. |
 | documents, document_versions | mouvement, genre affectation/restitution, version du modèle, original/scan, hash, taille, ID archive, état, auteur | Pas d’écrasement du PDF ; scan lié à la version imprimée. Accès selon rôle et pièce. |
+| migration_batches, migration_rows, legacy_ids | lot de reprise d'une liste SharePoint (fichier, empreinte), lignes avec proposition, décision et résultat ; correspondance ancien ID SharePoint → enregistrement | ADMIN. Aperçu sans écriture métier, décision nominative, application ligne par ligne ; un même fichier n'est appliqué qu'une fois ; aucun parcours, tâche ni avis. |
 | import_batches, import_rows | auteur, empreinte classeur, version du format ; numéro de ligne, clé, décision, messages, résultat | Pas d’activation de compte, de tâche ou d’envoi lors de l’import. |
 | audit_events, command_keys, outbox, deliveries | auteur/action, corrélation, instant ; réponse rejouable ; événement et destinataire, bail, essais, dernier résultat | Même transaction que les mutations métier. Déduplication par événement et destinataire, même si plusieurs rôles. Historique en lecture seule pour les utilisateurs. |
 
@@ -32,3 +33,19 @@ Le fichier vierge joint a huit colonnes. ID salarié et Matricule sont du texte,
 - ID applicatif connu → proposer une mise à jour, jamais le remplacement d’identité. À défaut, matricule exact unique → proposer la correspondance. Si les deux identifiants se contredisent, rejeter la ligne. Sans les deux : proposer une création seulement après revue des ressemblances. Aucun rapprochement automatique par le nom seul.
 - Une valeur vide dans une mise à jour signifie « conserver » ; effacement volontaire depuis la fiche et tracé. Ignorer les lignes vides. Refuser les formules dans les champs importés ; exporter en texte les identifiants/contenus pouvant ressembler à une formule.
 - Avant confirmation : rapport nouvelle/modifiée/à revoir/rejetée et motif, affichage avant/après. Appliquer uniquement la sélection valide en transaction. Une ligne ambiguë n’est jamais appliquée ; après correction, nouveau lot traçable. Export filtré par autorisation ; aucun email déclenché par import.
+
+## Évolutions de la première livraison (migration 0003)
+
+| Table | Ajout |
+|---|---|
+| `employees` | `poste_fixe` (ancien champ SharePoint, sens à confirmer), `import_note` (RH/ADMIN), `leaving` + `planned_exit_date` (« en départ »), `primary_line_id` (ligne principale, contrôlée : SIM détenue) |
+| `wilayas` | `latitude`, `longitude` (reprises si présentes, jamais calculées) |
+| `case_needs`, `profile_needs` | catégories `ecran`, `tablette`, `imprimante`, `accessoire` ; `quantity` (vide = 1) |
+
+**Classeur Excel « personnel-v2 ».**
+- Les huit colonnes historiques restent obligatoires et à la même place.
+- Six colonnes facultatives les suivent : Contrat, Profil de poste, Manager (matricule), Manager (ID salarié), Manager (nom, pour information), Wilayas (codes).
+- Un ancien classeur à huit colonnes reste accepté : les colonnes absentes valent « conserver ».
+- **Wilayas** : `16;31` remplace la liste ; `aucune` la vide.
+- **Manager** : il est désigné par matricule ou par ID, jamais par le nom. Un nom seul produit une « attention » et ne modifie rien. Un manager égal à la personne, ou un ID et un matricule contradictoires, rejettent la ligne.
+- **Aperçu** : création, modification, inchangée, conflit à arbitrer, erreur (rejetée).

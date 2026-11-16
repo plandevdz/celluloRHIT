@@ -4,7 +4,7 @@ import { api, ApiError } from "../api";
 import { useAuth } from "../auth";
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHeader, Pager, Section } from "../components";
 import { useLoad } from "../hooks";
-import { employeeStatusLabel, fmtDate } from "../labels";
+import { DEPARTMENTS, displayStatus, employeeStatusLabel, fmtDate } from "../labels";
 
 export default function EmployeesPage() {
   const { has } = useAuth();
@@ -15,6 +15,13 @@ export default function EmployeesPage() {
   const query = new URLSearchParams({ page: String(page) });
   if (params.get("q")) query.set("q", params.get("q")!);
   if (status) query.set("status", status);
+  // Filtres conservés dans l'URL (favori, retour arrière).
+  for (const [k, api_k] of [["site", "site_id"], ["departement", "department"], ["profil", "profile_id"], ["wilaya", "wilaya_id"], ["incomplet", "incomplet"]]) {
+    if (params.get(k)) query.set(api_k, params.get(k)!);
+  }
+  const sites = useLoad(() => api<any[]>("/sites"), []);
+  const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
+  const wilayas = useLoad(() => api<any[]>("/wilayas"), []);
   const list = useLoad(() => api<{ items: any[]; total: number; page_size: number }>(`/employees?${query}`), [params.toString()]);
   const [creating, setCreating] = useState(false);
 
@@ -72,6 +79,58 @@ export default function EmployeesPage() {
             ))}
           </select>
         </label>
+        <label className="field">
+          <span className="field-label">Site</span>
+          <select value={params.get("site") ?? ""} onChange={(e) => setFilter("site", e.target.value)}>
+            <option value="">Tous</option>
+            {sites.data?.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">Département</span>
+          <select value={params.get("departement") ?? ""} onChange={(e) => setFilter("departement", e.target.value)}>
+            <option value="">Tous</option>
+            {DEPARTMENTS.map((d) => (
+              <option key={d} value={d}>
+                {d}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">Profil</span>
+          <select value={params.get("profil") ?? ""} onChange={(e) => setFilter("profil", e.target.value)}>
+            <option value="">Tous</option>
+            {profiles.data?.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+                {!p.active ? " (inactif)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">Wilaya couverte</span>
+          <select value={params.get("wilaya") ?? ""} onChange={(e) => setFilter("wilaya", e.target.value)}>
+            <option value="">Toutes</option>
+            {wilayas.data?.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.code} {w.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="field">
+          <span className="field-label">Fiches</span>
+          <select value={params.get("incomplet") ?? ""} onChange={(e) => setFilter("incomplet", e.target.value)}>
+            <option value="">Toutes</option>
+            <option value="true">À compléter</option>
+          </select>
+        </label>
         <button className="btn" type="submit">
           Rechercher
         </button>
@@ -91,6 +150,7 @@ export default function EmployeesPage() {
                   <th>Matricule</th>
                   <th>Poste</th>
                   <th>Site</th>
+                  <th>Profil · wilayas</th>
                   <th>Statut</th>
                   <th>Dossiers ouverts</th>
                 </tr>
@@ -107,12 +167,26 @@ export default function EmployeesPage() {
                     </td>
                     <td className="mono">{e.matricule ?? "—"}</td>
                     <td>{e.job_title ?? "—"}</td>
-                    <td>{e.site_name ?? "—"}</td>
                     <td>
-                      <Badge status={e.status} label={employeeStatusLabel[e.status]} />
+                      {e.site_name ?? "—"}
+                      {e.department && <div className="small muted">{e.department}</div>}
+                    </td>
+                    <td className="small">
+                      {e.profile_name ?? "—"}
+                      {e.wilayas?.length > 0 && <div className="muted">{e.wilayas.join(", ")}</div>}
+                    </td>
+                    <td>
+                      <Badge status={displayStatus(e)} label={employeeStatusLabel[displayStatus(e)]} />
                       {e.status === "a_venir" && <div className="small muted">le {fmtDate(e.planned_arrival)}</div>}
                     </td>
-                    <td className="num">{e.open_cases}</td>
+                    <td className="num">
+                      {e.open_cases}
+                      {e.missing?.length > 0 && (
+                        <div className="small" title="Champs à compléter">
+                          <span className="tag">à compléter : {e.missing.join(", ")}</span>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

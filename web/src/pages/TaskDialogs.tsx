@@ -4,13 +4,15 @@ import { ErrorBox, Field, Modal, Notice } from "../components";
 import { useLoad } from "../hooks";
 import { fmtDate, fmtDateTime, needLabel, resolutionLabel, todayIso } from "../labels";
 
-const EQUIPMENT = ["pc", "telephone", "sim"];
+const EQUIPMENT = ["pc", "ecran", "tablette", "imprimante", "accessoire", "telephone", "sim"];
 const ACCOUNTS = ["email_pro", "xena", "intelix"];
 
 function holdingMatches(category: string, h: any): boolean {
   if (category === "pc") return h.item_type === "asset" && ["pc_portable", "pc_fixe"].includes(h.asset_kind);
   if (category === "telephone") return h.item_type === "asset" && h.asset_kind === "telephone";
   if (category === "sim") return h.item_type === "sim";
+  if (["ecran", "tablette", "imprimante"].includes(category)) return h.item_type === "asset" && h.asset_kind === category;
+  if (category === "accessoire") return h.item_type === "accessoire";
   return false;
 }
 
@@ -27,18 +29,27 @@ export function CompleteTaskDialog({
   onDone: () => void;
 }) {
   const category: string = task.need_category;
-  const equipment = EQUIPMENT.includes(category);
+  const vehicle = category === "vehicule";
+  const equipment = EQUIPMENT.includes(category) || vehicle;
   const account = ACCOUNTS.includes(category);
+  const delta = !category && !!task.transfer_delta_id;
   const [mode, setMode] = useState<string>(equipment ? "remis" : "realise");
   const [selected, setSelected] = useState<string[]>([]);
   const [note, setNote] = useState("");
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const holdings = useLoad(
-    () => (equipment ? api<any[]>(`/employees/${employeeId}/holdings`) : Promise.resolve([])),
-    [employeeId, equipment],
+    () =>
+      vehicle
+        ? api<any[]>(`/employees/${employeeId}/vehicles`).then((vs) =>
+            vs.map((v) => ({ assignment_id: v.assignment_id, label: `Véhicule ${v.plate}`, identifier: v.label, origin_reference: v.handover_reference, since: v.since, vehicle: true })),
+          )
+        : equipment
+          ? api<any[]>(`/employees/${employeeId}/holdings`)
+          : Promise.resolve([]),
+    [employeeId, equipment, vehicle],
   );
-  const candidates = (holdings.data ?? []).filter((h) => holdingMatches(category, h));
+  const candidates = (holdings.data ?? []).filter((h) => h.vehicle || holdingMatches(category, h));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -56,7 +67,18 @@ export function CompleteTaskDialog({
     }
   };
 
-  const options: { id: string; label: string; hint: string }[] = equipment
+  const options: { id: string; label: string; hint: string }[] = delta
+    ? [
+        {
+          id: "realise",
+          label: task.title.startsWith("Vérifier") ? "Vérifié" : "Repris",
+          hint: task.title.startsWith("Vérifier")
+            ? "Indiquez l'état réel constaté (conservé, à reprendre…)."
+            : "Vérifié sur la restitution, la coupure ou la libération enregistrée.",
+        },
+        { id: "exception", label: "Exception motivée", hint: "Soldée sans reprise, sur motif." },
+      ]
+    : equipment
     ? [
         { id: "remis", label: "Remis", hint: `Vérifié sur les remises enregistrées dans ce dossier (${needLabel[category]}).` },
         { id: "deja_detenu", label: "Déjà détenu", hint: "Le salarié détient déjà ce bien (affectation active vérifiée)." },
@@ -109,8 +131,11 @@ export function CompleteTaskDialog({
               ))}
             </fieldset>
           ))}
-        <Field label={mode === "exception" ? "Motif de l'exception" : "Observation"} required={mode === "exception"}>
-          <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} required={mode === "exception"} />
+        <Field
+          label={mode === "exception" ? "Motif de l'exception" : delta && task.title.startsWith("Vérifier") ? "État réel constaté" : "Observation"}
+          required={mode === "exception" || (delta && task.title.startsWith("Vérifier"))}
+        >
+          <textarea rows={2} value={note} onChange={(e) => setNote(e.target.value)} required={mode === "exception" || (delta && task.title.startsWith("Vérifier"))} />
         </Field>
         <ErrorBox error={error} />
         <div className="form-actions">

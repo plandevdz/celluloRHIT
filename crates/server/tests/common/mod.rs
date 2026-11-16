@@ -35,6 +35,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
     } else {
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
     };
+    let data_dir_backup = data_dir.join("_sauvegardes");
     Config {
         database_url: String::new(),
         bind_addr: "127.0.0.1:0".into(),
@@ -46,9 +47,30 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
         session_max_hours: 10,
         mail_mode: MailMode::Journal,
         mail_test_recipient: None,
+        mail_sender: None,
+        mail_graph: None,
+        mail_allowed_domains: vec![],
+        archive_mode: server::config::ArchiveMode::Desactive,
+        archive_graph: None,
+        archive_target: None,
         pdf_font: font.into(),
         pdf_font_bold: bold.into(),
         max_upload_bytes: 2 * 1024 * 1024,
+        alert_days: 30,
+        alert_km: 1000,
+        escalation_minutes: 60,
+        disabled_modules: vec![],
+        graph_authority: "https://login.microsoftonline.com".into(),
+        graph_endpoint: "https://graph.microsoft.com".into(),
+        env_mail_cert: None,
+        env_archive_cert: None,
+        backup_dir: data_dir_backup,
+        pg_dump_bin: "pg_dump".into(),
+        gpg_bin: "gpg".into(),
+        caddy_data_dir: None,
+        database_password: None,
+        backup: None,
+        overridden: vec![],
     }
 }
 
@@ -57,6 +79,17 @@ impl TestApp {
         let dir = std::env::temp_dir().join(format!("cellulo-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let state = AppState::new(pool, test_config(dir.clone()));
+        TestApp { router: app(state.clone()), state, _data: tempdir::TempDirGuard(dir) }
+    }
+
+    /// Instance avec une configuration ajustée (mode pilote, mode d'envoi).
+    #[allow(dead_code)]
+    pub async fn with_config(pool: PgPool, adjust: impl FnOnce(&mut Config)) -> Self {
+        let dir = std::env::temp_dir().join(format!("cellulo-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = test_config(dir.clone());
+        adjust(&mut config);
+        let state = AppState::new(pool, config);
         TestApp { router: app(state.clone()), state, _data: tempdir::TempDirGuard(dir) }
     }
 
@@ -129,6 +162,31 @@ impl TestApp {
         let bytes = resp.into_body().collect().await.unwrap().to_bytes();
         let value = serde_json::from_slice(&bytes).unwrap_or_else(|_| json!({ "raw_len": bytes.len() }));
         (status, value)
+    }
+
+    /// Dépôt d'un fichier (multipart, champ « file »).
+    pub async fn upload(&self, s: &Session, uri: &str, filename: &str, bytes: &[u8]) -> (StatusCode, Value) {
+        let boundary = "CELLULOBOUNDARY";
+        let mut body = format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: application/octet-stream\r\n\r\n"
+        )
+        .into_bytes();
+        body.extend_from_slice(bytes);
+        body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let req = Request::builder()
+            .method(Method::POST)
+            .uri(format!("/api/v1{uri}"))
+            .header(header::COOKIE, &s.cookie)
+            .header("x-cellulo-client", "web")
+            .header(header::CONTENT_TYPE, format!("multipart/form-data; boundary={boundary}"))
+            .body(Body::from(body))
+            .unwrap();
+        let (status, bytes) = self.raw(req).await;
+        (status, serde_json::from_slice(&bytes).unwrap_or(json!({ "raw": String::from_utf8_lossy(&bytes) })))
+    }
+
+    pub async fn count(&self, sql: &str) -> i64 {
+        sqlx::query_scalar(sql).fetch_one(self.pool()).await.unwrap()
     }
 
     pub async fn raw(&self, req: Request<Body>) -> (StatusCode, Vec<u8>) {

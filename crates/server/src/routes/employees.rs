@@ -23,6 +23,7 @@ pub fn routes() -> Router<AppState> {
         .route("/employees/{id}/accounts", get(list_accounts).post(add_account))
         .route("/employees/{id}/accounts/{account_id}", axum::routing::patch(update_account))
         .route("/employees/{id}/m365", post(set_m365))
+        .route("/employees/{id}/primary-line", post(set_primary_line))
 }
 
 /// Peut voir la fiche ? RH/Admin/IT : oui. GRAPHISTE/FORMATION : seulement
@@ -49,10 +50,39 @@ pub async fn can_view_employee(conn: &mut PgConnection, user: &CurrentUser, empl
 #[derive(Deserialize)]
 struct ListQuery {
     q: Option<String>,
+    /// a_venir | actif | en_depart | sorti
     status: Option<String>,
     site_id: Option<Uuid>,
+    department: Option<String>,
+    profile_id: Option<Uuid>,
+    /// Une personne qui couvre plusieurs wilayas apparaît pour chacune.
+    wilaya_id: Option<Uuid>,
+    /// Fiches à compléter (site ou poste « À préciser », matricule,
+    /// département ou contrat manquant).
+    incomplet: Option<bool>,
     page: Option<i64>,
 }
+
+/// Filtres communs à la liste, au comptage et à l'export.
+pub const EMPLOYEE_FILTERS: &str = "
+            ($1::text IS NULL OR lower(e.first_name || ' ' || e.last_name) LIKE $1
+                 OR lower(e.last_name || ' ' || e.first_name) LIKE $1 OR lower(coalesce(e.matricule, '')) LIKE $1)
+            AND ($2::text IS NULL OR ($2 = 'en_depart' AND e.status <> 'sorti' AND e.leaving)
+                 OR ($2 = 'actif' AND e.status = 'actif' AND NOT e.leaving) OR ($2 NOT IN ('en_depart', 'actif') AND e.status = $2))
+            AND ($3::uuid IS NULL OR p.site_id = $3)
+            AND ($6::text IS NULL OR lower(coalesce(p.department, '')) = lower($6))
+            AND ($7::uuid IS NULL OR p.job_profile_id = $7)
+            AND ($8::uuid IS NULL OR EXISTS (SELECT 1 FROM employee_wilayas w WHERE w.employee_id = e.id AND w.wilaya_id = $8))
+            AND ($9::bool IS NOT TRUE OR p.site_id IN (SELECT id FROM sites WHERE name = 'À préciser') OR p.job_title = 'À préciser'
+                 OR e.matricule IS NULL OR p.department IS NULL OR e.contract_type IS NULL)";
+
+/// Champs manquants d'une fiche (liste du personnel).
+const MISSING_FIELDS: &str = "array_remove(ARRAY[
+                CASE WHEN s.name = 'À préciser' THEN 'site' END,
+                CASE WHEN p.job_title = 'À préciser' THEN 'poste' END,
+                CASE WHEN e.matricule IS NULL THEN 'matricule' END,
+                CASE WHEN p.department IS NULL THEN 'département' END,
+                CASE WHEN e.contract_type IS NULL THEN 'contrat' END], NULL)";
 
 #[derive(Serialize, FromRow)]
 struct EmployeeListRow {
@@ -65,6 +95,11 @@ struct EmployeeListRow {
     job_title: Option<String>,
     site_name: Option<String>,
     open_cases: i64,
+    leaving: bool,
+    department: Option<String>,
+    profile_name: Option<String>,
+    wilayas: Vec<String>,
+    missing: Vec<String>,
 }
 
 const PAGE_SIZE: i64 = 50;
@@ -73,38 +108,48 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
     user.require(&[Role::Rh, Role::Admin, Role::It])?;
     let page = q.page.unwrap_or(1).max(1);
     let search = q.q.as_deref().and_then(domain::text::clean).map(|s| format!("%{}%", s.to_lowercase()));
-    let rows = sqlx::query_as::<_, EmployeeListRow>(
+    let department = q.department.as_deref().and_then(domain::text::clean);
+    let rows = sqlx::query_as::<_, EmployeeListRow>(&format!(
         "SELECT e.id, e.matricule, e.first_name, e.last_name, e.status, e.planned_arrival,
                 p.job_title, s.name AS site_name,
-                (SELECT count(*) FROM cases c WHERE c.employee_id = e.id AND c.status = 'ouvert') AS open_cases
+                (SELECT count(*) FROM cases c WHERE c.employee_id = e.id AND c.status = 'ouvert') AS open_cases,
+                e.leaving, p.department, jp.name AS profile_name,
+                (SELECT coalesce(array_agg(w.code::text || ' ' || w.name ORDER BY w.code), '{{}}')
+                   FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilayas,
+                {MISSING_FIELDS} AS missing
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
-          WHERE ($1::text IS NULL OR lower(e.first_name || ' ' || e.last_name) LIKE $1
-                 OR lower(e.last_name || ' ' || e.first_name) LIKE $1 OR lower(coalesce(e.matricule, '')) LIKE $1)
-            AND ($2::text IS NULL OR e.status = $2)
-            AND ($3::uuid IS NULL OR p.site_id = $3)
+           LEFT JOIN job_profiles jp ON jp.id = p.job_profile_id
+          WHERE {EMPLOYEE_FILTERS}
           ORDER BY e.last_name, e.first_name
-          LIMIT $4 OFFSET $5",
-    )
+          LIMIT $4 OFFSET $5"
+    ))
     .bind(&search)
     .bind(&q.status)
     .bind(q.site_id)
     .bind(PAGE_SIZE)
     .bind((page - 1) * PAGE_SIZE)
+    .bind(&department)
+    .bind(q.profile_id)
+    .bind(q.wilaya_id)
+    .bind(q.incomplet)
     .fetch_all(&state.pool)
     .await?;
-    let total: i64 = sqlx::query_scalar(
+    let total: i64 = sqlx::query_scalar(&format!(
         "SELECT count(*) FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
-          WHERE ($1::text IS NULL OR lower(e.first_name || ' ' || e.last_name) LIKE $1
-                 OR lower(e.last_name || ' ' || e.first_name) LIKE $1 OR lower(coalesce(e.matricule, '')) LIKE $1)
-            AND ($2::text IS NULL OR e.status = $2)
-            AND ($3::uuid IS NULL OR p.site_id = $3)",
-    )
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
+          WHERE $4::bigint IS NOT NULL AND $5::bigint IS NOT NULL AND {EMPLOYEE_FILTERS}"
+    ))
     .bind(&search)
     .bind(&q.status)
     .bind(q.site_id)
+    .bind(PAGE_SIZE)
+    .bind(0i64)
+    .bind(&department)
+    .bind(q.profile_id)
+    .bind(q.wilaya_id)
+    .bind(q.incomplet)
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(json!({ "items": rows, "total": total, "page": page, "page_size": PAGE_SIZE })))
@@ -139,7 +184,7 @@ async fn similar(State(state): State<AppState>, user: CurrentUser, Query(q): Que
         "SELECT e.id, e.matricule, e.first_name, e.last_name, e.status, p.job_title, s.name AS site_name,
                 ($2::text IS NOT NULL AND e.matricule_norm = $2) AS same_matricule
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
           WHERE e.name_key = $1 OR ($2::text IS NOT NULL AND e.matricule_norm = $2)
           ORDER BY same_matricule DESC, e.last_name
@@ -278,6 +323,19 @@ struct EmployeeDetail {
     manager: Option<String>,
     site_id: Option<Uuid>,
     site_name: Option<String>,
+    contract_type: Option<String>,
+    poste_fixe: Option<String>,
+    manager_employee_id: Option<Uuid>,
+    manager_employee_name: Option<String>,
+    job_profile_id: Option<Uuid>,
+    job_profile_name: Option<String>,
+    position_id: Option<Uuid>,
+    position_valid_from: Option<NaiveDate>,
+    wilayas: Value,
+    leaving: bool,
+    planned_exit_date: Option<NaiveDate>,
+    import_note: Option<String>,
+    primary_line_id: Option<Uuid>,
 }
 
 async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
@@ -288,11 +346,18 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     let e = sqlx::query_as::<_, EmployeeDetail>(
         "SELECT e.id, e.matricule, e.first_name, e.last_name, e.status, e.planned_arrival, e.actual_arrival,
                 e.exit_date, e.m365_verified_at, e.arrival_confirmed_at, cu.display_name AS arrival_confirmed_by_name,
-                e.version, p.job_title, p.department, p.manager, p.site_id, s.name AS site_name
+                e.version, p.job_title, p.department, p.manager, p.site_id, s.name AS site_name,
+                e.contract_type, e.poste_fixe, p.manager_employee_id, me.first_name || ' ' || me.last_name AS manager_employee_name,
+                p.job_profile_id, jp.name AS job_profile_name, p.id AS position_id, p.valid_from AS position_valid_from,
+                (SELECT coalesce(jsonb_agg(jsonb_build_object('id', w.id, 'code', w.code, 'name', w.name) ORDER BY w.code), '[]')
+                   FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilayas,
+                e.leaving, e.planned_exit_date, e.import_note, e.primary_line_id
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
            LEFT JOIN users cu ON cu.id = e.arrival_confirmed_by
+           LEFT JOIN employees me ON me.id = p.manager_employee_id
+           LEFT JOIN job_profiles jp ON jp.id = p.job_profile_id
           WHERE e.id = $1",
     )
     .bind(id)
@@ -338,11 +403,26 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     } else {
         json!([])
     };
+    let licenses: Value = if full {
+        crate::routes::software::employee_licenses_json(&mut conn, id).await?
+    } else {
+        json!([])
+    };
+    // Véhicules : parc RH, visible du RH et de l'ADMIN.
+    let vehicles: Value = if hr {
+        crate::routes::vehicles::held_vehicles_json(&mut conn, id).await?
+    } else {
+        json!([])
+    };
     let trainings: Value = if hr || user.has(Role::Formation) {
         sqlx::query_scalar(
             "SELECT coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'name', tc.name, 'status', t.status,
-                                       'planned_date', t.planned_date, 'done_date', t.done_date) ORDER BY tc.name), '[]')
-               FROM training_sessions t JOIN training_catalog tc ON tc.id = t.catalog_id WHERE t.employee_id = $1",
+                                       'planned_date', t.planned_date, 'done_date', t.done_date,
+                                       'trainer', coalesce(t.trainer_name, u.display_name), 'recorded_by', rb.display_name,
+                                       'reprise', t.reason = 'Reprise SharePoint') ORDER BY tc.name), '[]')
+               FROM training_sessions t JOIN training_catalog tc ON tc.id = t.catalog_id
+               LEFT JOIN users u ON u.id = t.trainer_id LEFT JOIN users rb ON rb.id = t.recorded_by
+              WHERE t.employee_id = $1",
         )
         .bind(id)
         .fetch_one(&mut *conn)
@@ -350,8 +430,10 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     } else {
         json!([])
     };
-    // Coordonnées professionnelles utiles à une carte de visite.
-    let contact: Value = if hr || user.has(Role::Graphiste) {
+    // Coordonnées professionnelles utiles à une carte de visite : l'adresse
+    // consignée et les lignes dont la SIM est réellement détenue, la ligne
+    // principale en premier.
+    let contact: Value = if full || user.has(Role::Graphiste) {
         sqlx::query_scalar(
             "SELECT jsonb_build_object(
                     'email_pro', (SELECT identifier FROM employee_accounts
@@ -359,7 +441,13 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
                                    ORDER BY created_at DESC LIMIT 1),
                     'mobile', (SELECT l.number FROM assignments a JOIN sim_cards s ON s.id = a.sim_id
                                  JOIN mobile_lines l ON l.id = s.line_id
-                                WHERE a.employee_id = $1 AND a.ended_at IS NULL LIMIT 1))",
+                                WHERE a.employee_id = $1 AND a.ended_at IS NULL
+                                ORDER BY (l.id = (SELECT primary_line_id FROM employees WHERE id = $1)) DESC NULLS LAST, a.started_at LIMIT 1),
+                    'lines', (SELECT coalesce(jsonb_agg(jsonb_build_object('line_id', l.id, 'number', l.number, 'operator', l.operator,
+                                     'primary', l.id = (SELECT primary_line_id FROM employees WHERE id = $1))
+                                     ORDER BY (l.id = (SELECT primary_line_id FROM employees WHERE id = $1)) DESC NULLS LAST, l.number), '[]')
+                                FROM assignments a JOIN sim_cards s ON s.id = a.sim_id JOIN mobile_lines l ON l.id = s.line_id
+                               WHERE a.employee_id = $1 AND a.ended_at IS NULL))",
         )
         .bind(id)
         .fetch_one(&mut *conn)
@@ -369,7 +457,13 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     };
 
     let employee = if full {
-        serde_json::to_value(&e).map_err(anyhow::Error::from)?
+        let mut v = serde_json::to_value(&e).map_err(anyhow::Error::from)?;
+        // Contrat et note de reprise : RH et ADMIN seulement.
+        if !hr {
+            v["contract_type"] = Value::Null;
+            v["import_note"] = Value::Null;
+        }
+        v
     } else {
         json!({
             "id": e.id, "first_name": e.first_name, "last_name": e.last_name, "status": e.status,
@@ -384,6 +478,8 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
         "positions": positions,
         "cases": cases,
         "holdings": holdings,
+        "licenses": licenses,
+        "vehicles": vehicles,
         "trainings": trainings,
     })))
 }
@@ -496,7 +592,7 @@ async fn arrivals_to_check(State(state): State<AppState>, user: CurrentUser) -> 
         "SELECT e.id, e.first_name, e.last_name, e.planned_arrival, s.name AS site_name,
                 c.reference AS onb_reference, coalesce(c.status = 'clos', false) AS onb_closed
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
            LEFT JOIN LATERAL (SELECT reference, status FROM cases
                                WHERE employee_id = e.id AND kind = 'ONB' ORDER BY created_at DESC LIMIT 1) c ON true
@@ -517,7 +613,30 @@ struct UpdateInput {
     last_name: Option<String>,
     /// `Some("")` efface volontairement le matricule (tracé).
     matricule: Option<String>,
+    /// `Some("")` efface le type de contrat.
+    contract_type: Option<String>,
+    poste_fixe: Option<String>,
+    /// Remplace la liste des wilayas couvertes.
+    wilaya_ids: Option<Vec<Uuid>>,
+    /// Données organisationnelles de la situation en cours (sans changer
+    /// de poste : une mutation passe par un dossier MUT).
+    manager_employee_id: Option<Uuid>,
+    #[serde(default)]
+    clear_manager: bool,
+    job_profile_id: Option<Uuid>,
+    department: Option<String>,
+    /// Poste et site de la situation en cours, corrigés librement par le RH
+    /// (fiche incomplète ou erronée). Tracé dans le journal (avant/après).
+    job_title: Option<String>,
+    site_id: Option<Uuid>,
+    /// « En départ » : prépare sa sortie, sans dossier OFF complet.
+    leaving: Option<bool>,
+    /// `Some("")` efface la date de sortie prévue.
+    planned_exit_date: Option<String>,
+    import_note: Option<String>,
 }
+
+pub const CONTRACT_TYPES: &[&str] = &["cdi", "cdd", "stage", "interim", "apprentissage", "consultant"];
 
 async fn update(
     State(state): State<AppState>,
@@ -537,6 +656,15 @@ async fn update(
     if version != input.version {
         return Err(AppError::stale());
     }
+    let contract = match input.contract_type.as_deref() {
+        None => None,
+        Some("") => Some(None),
+        Some(c) if CONTRACT_TYPES.contains(&c) => Some(Some(c.to_string())),
+        Some(_) => return Err(AppError::invalid("contract_type", "type de contrat inconnu")),
+    };
+    if input.manager_employee_id == Some(id) {
+        return Err(AppError::invalid("manager_employee_id", "un salarié ne peut pas être son propre manager"));
+    }
     let first = match &input.first_name { Some(v) => required("first_name", v, "prénom")?, None => first };
     let last = match &input.last_name { Some(v) => required("last_name", v, "nom")?, None => last };
     let new_matricule = match &input.matricule { Some(v) => domain::text::clean(v), None => matricule.clone() };
@@ -553,6 +681,89 @@ async fn update(
     .bind(&norm)
     .execute(&mut *tx)
     .await?;
+    if let Some(c) = &contract {
+        sqlx::query("UPDATE employees SET contract_type = $2 WHERE id = $1").bind(id).bind(c).execute(&mut *tx).await?;
+    }
+    if let Some(l) = &input.poste_fixe {
+        sqlx::query("UPDATE employees SET poste_fixe = $2 WHERE id = $1").bind(id).bind(domain::text::clean(l)).execute(&mut *tx).await?;
+    }
+    if let Some(n) = &input.import_note {
+        sqlx::query("UPDATE employees SET import_note = $2 WHERE id = $1").bind(id).bind(domain::text::clean(n)).execute(&mut *tx).await?;
+    }
+    if let Some(d) = &input.planned_exit_date {
+        let date = match d.trim() {
+            "" => None,
+            v => Some(NaiveDate::parse_from_str(v, "%Y-%m-%d").map_err(|_| AppError::invalid("planned_exit_date", "date invalide"))?),
+        };
+        sqlx::query("UPDATE employees SET planned_exit_date = $2 WHERE id = $1").bind(id).bind(date).execute(&mut *tx).await?;
+    }
+    if let Some(l) = input.leaving {
+        let status: String = sqlx::query_scalar("SELECT status FROM employees WHERE id = $1").bind(id).fetch_one(&mut *tx).await?;
+        if l && status == "sorti" {
+            return Err(AppError::conflict("salarié déjà sorti"));
+        }
+        sqlx::query("UPDATE employees SET leaving = $2, planned_exit_date = CASE WHEN $2 THEN planned_exit_date ELSE NULL END WHERE id = $1")
+            .bind(id)
+            .bind(l)
+            .execute(&mut *tx)
+            .await?;
+    }
+    if let Some(ws) = &input.wilaya_ids {
+        sqlx::query("DELETE FROM employee_wilayas WHERE employee_id = $1").bind(id).execute(&mut *tx).await?;
+        for w in ws {
+            sqlx::query("INSERT INTO employee_wilayas (employee_id, wilaya_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+                .bind(id)
+                .bind(w)
+                .execute(&mut *tx)
+                .await?;
+        }
+    }
+    if input.manager_employee_id.is_some() || input.clear_manager || input.job_profile_id.is_some() || input.department.is_some() {
+        sqlx::query(
+            "UPDATE employee_positions
+                SET manager_employee_id = CASE WHEN $5 THEN NULL ELSE coalesce($2, manager_employee_id) END,
+                    manager = CASE WHEN $5 THEN NULL
+                                   WHEN $2::uuid IS NOT NULL THEN (SELECT first_name || ' ' || last_name FROM employees WHERE id = $2)
+                                   ELSE manager END,
+                    job_profile_id = coalesce($3, job_profile_id),
+                    department = CASE WHEN $4::text IS NULL THEN department ELSE nullif($4, '') END
+              WHERE employee_id = $1 AND valid_to IS NULL",
+        )
+        .bind(id)
+        .bind(input.manager_employee_id)
+        .bind(input.job_profile_id)
+        .bind(input.department.as_deref().map(|d| domain::text::clean(d).unwrap_or_default()))
+        .bind(input.clear_manager)
+        .execute(&mut *tx)
+        .await?;
+    }
+    let mut situation = Value::Null;
+    if input.job_title.is_some() || input.site_id.is_some() {
+        let before: Option<(String, Uuid)> =
+            sqlx::query_as("SELECT job_title, site_id FROM employee_positions WHERE employee_id = $1 AND valid_to IS NULL FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let (old_title, old_site) = before.ok_or_else(|| AppError::conflict("aucune situation en cours pour ce salarié"))?;
+        let title = match &input.job_title {
+            Some(t) => required("job_title", t, "poste")?,
+            None => old_title.clone(),
+        };
+        if let Some(site) = input.site_id {
+            let ok: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sites WHERE id = $1 AND active)").bind(site).fetch_one(&mut *tx).await?;
+            if !ok {
+                return Err(AppError::invalid("site_id", "site inconnu ou fermé"));
+            }
+        }
+        let site = input.site_id.unwrap_or(old_site);
+        sqlx::query("UPDATE employee_positions SET job_title = $2, site_id = $3 WHERE employee_id = $1 AND valid_to IS NULL")
+            .bind(id)
+            .bind(&title)
+            .bind(site)
+            .execute(&mut *tx)
+            .await?;
+        situation = json!({ "poste_avant": old_title, "poste_apres": title, "site_avant": old_site, "site_apres": site });
+    }
     audit::record(
         &mut tx,
         &user,
@@ -561,7 +772,11 @@ async fn update(
             entity: "employee",
             entity_id: Some(id),
             employee_id: Some(id),
-            data: Some(json!({ "matricule_avant": matricule, "matricule_apres": new_matricule })),
+            data: Some(json!({
+                "matricule_avant": matricule, "matricule_apres": new_matricule, "contrat": contract,
+                "manager": input.manager_employee_id, "profil": input.job_profile_id, "wilayas": input.wilaya_ids,
+                "en_depart": input.leaving, "sortie_prevue": input.planned_exit_date, "situation": situation,
+            })),
             ..Default::default()
         },
     )
@@ -580,12 +795,14 @@ struct AccountRow {
     verified_at: Option<DateTime<Utc>>,
     ended_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
+    /// Repris de SharePoint : sans date de vérification, rien n'est réputé vérifié.
+    imported: bool,
 }
 
 async fn list_accounts(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Vec<AccountRow>>> {
     user.require(&[Role::It, Role::Rh, Role::Admin])?;
     let rows = sqlx::query_as::<_, AccountRow>(
-        "SELECT id, system, platform, identifier, status, verified_at, ended_at, created_at
+        "SELECT id, system, platform, identifier, status, verified_at, ended_at, created_at, imported
            FROM employee_accounts WHERE employee_id = $1 ORDER BY created_at",
     )
     .bind(id)
@@ -667,7 +884,9 @@ async fn update_account(
     let n = sqlx::query(
         "UPDATE employee_accounts SET status = $3,
                 ended_at = CASE WHEN $3 = 'coupe' THEN now() ELSE NULL END,
-                verified_at = now()
+                -- Seule une confirmation « actif » vaut vérification ; « à vérifier »
+                -- ou une coupure ne datent pas une vérification qui n'a pas eu lieu.
+                verified_at = CASE WHEN $3 = 'actif' THEN now() ELSE verified_at END
           WHERE id = $2 AND employee_id = $1",
     )
     .bind(id)
@@ -714,6 +933,48 @@ async fn set_m365(
         return Err(AppError::not_found("salarié"));
     }
     audit::record(&mut tx, &user, Audit { action: "m365_verification", entity: "employee", entity_id: Some(id), employee_id: Some(id), data: Some(json!({ "verified": input.verified })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct PrimaryLineInput {
+    line_id: Option<Uuid>,
+}
+
+/// Ligne principale : choisie parmi les lignes dont le salarié détient
+/// réellement la SIM ; aucune attribution depuis un champ libre.
+async fn set_primary_line(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+    Json(input): Json<PrimaryLineInput>,
+) -> AppResult<Json<Value>> {
+    user.require(&[Role::Rh, Role::It, Role::Admin])?;
+    let mut tx = state.pool.begin().await?;
+    if let Some(line) = input.line_id {
+        let held: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM assignments a JOIN sim_cards s ON s.id = a.sim_id
+                             WHERE a.employee_id = $1 AND a.ended_at IS NULL AND s.line_id = $2)",
+        )
+        .bind(id)
+        .bind(line)
+        .fetch_one(&mut *tx)
+        .await?;
+        if !held {
+            return Err(AppError::invalid("line_id", "la ligne principale doit être une ligne dont le salarié détient la SIM"));
+        }
+    }
+    let n = sqlx::query("UPDATE employees SET primary_line_id = $2, updated_at = now() WHERE id = $1")
+        .bind(id)
+        .bind(input.line_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("salarié"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "ligne_principale", entity: "employee", entity_id: Some(id), employee_id: Some(id), data: Some(json!({ "ligne": input.line_id })), ..Default::default() }).await?;
     tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }

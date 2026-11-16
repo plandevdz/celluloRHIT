@@ -50,3 +50,52 @@ Depuis toute fiche de salarié actif ou à venir, RH/Admin ouvre DEM-xxxxx, choi
 
 ## M07 — Exploitation RH et états des lieux
 Import/export Excel de Personnel, prévisualisation et rapport ligne par ligne. Importer des fiches ne crée pas de parcours, de comptes ni d’emails. Rien n’est supprimé par absence du fichier. Exporter par site, statut et période ; périmètre sécurisé côté serveur. États attendus : salariés à venir/actifs/sortis, demandes ouvertes, tâches sans responsable/en retard, accès à couper, licences disponibles, actifs et véhicules par détenteur, retours et signatures manquants, écarts d’inventaire et échéances véhicule/logiciel. Les actions courantes ne doivent demander que les informations indispensables à leur exécution.
+
+## Première livraison : fiche complète, profils administrables, équipements distincts
+
+La correspondance des 184 champs de l'ancienne application est tenue dans `docs/correspondance-sharepoint.md`.
+
+- **Fiche personnel.** Elle porte :
+  - contrat (RH et ADMIN seulement) et profil de poste ;
+  - manager choisi parmi les fiches (jamais soi-même) ;
+  - aucune, une ou plusieurs wilayas couvertes, sans lien avec le site de rattachement ;
+  - ligne mobile principale, choisie parmi les SIM réellement détenues ;
+  - indicateur « en départ » avec date prévue.
+  « En départ » reste distinct du statut : la personne reste dans l'effectif. Créer un départ (M06) pose l'indicateur ; la sortie effective le retire.
+- **Profils de poste.** Le RH et l'ADMIN les créent, les modifient et les désactivent. Un profil suggère :
+  - des besoins distincts avec quantités : PC (préférence fixe ou portable), écran, tablette, imprimante, accessoire, téléphone, SIM, comptes, cartes, véhicule ;
+  - des formations du catalogue réel.
+  Les suggestions sont copiées dans le dossier à l'annonce, avec leur origine. Modifier ou désactiver le profil ensuite ne change aucun dossier existant. Un choix manuel du RH n'est jamais écrasé par un profil appliqué après coup.
+- **Équipements distincts.** Chaque catégorie a sa tâche et son compteur :
+  - une SIM ne solde pas une tâche PC ;
+  - un écran remis sur deux demandés laisse la tâche ouverte (« 1 écran sur 2 remis ») ;
+  - un portable remis à la place d'un fixe exige un motif, affiché « Portable remis à la place du fixe ».
+- **Anciens champs ambigus.** Les décisions sont listées en fin de `docs/correspondance-sharepoint.md`. Trois points restent à arbitrer : « Poste fixe », « Carte de visite » et les profils d'utilisateurs « Manager » et « Moyens généraux ».
+
+## Règles provisoires du 16/11/2026
+
+- **« PC fixe »** dans une nouvelle demande désigne un ordinateur de bureau. L'ancienne colonne « Poste fixe » de la fiche est conservée telle quelle jusqu'à confirmation de son sens.
+- **Ancienne case « Carte de visite »** : elle ne prouve ni impression ni remise. Elle est gardée en texte (remarque de reprise), sans tâche ni preuve.
+- **Anciens profils Manager, Moyens généraux, Responsable** : aucun droit automatique. Un manager se désigne sur la fiche sans obtenir d'accès.
+- **Formation** : la personne qui a animé la session (compte FORMATION ou simple nom, sans compte créé) est distincte de l'utilisateur qui l'enregistre.
+- **Non validé à ce jour** : l'abandon des liens aux anciens dossiers et la réouverture manuelle des dossiers en cours (voir `docs/pilote.md`, décision 1).
+
+## Pilote sur un site (décision du 16/11/2026, pilote seulement)
+
+- À compter de la date de démarrage, seules les **nouvelles** arrivées et demandes ponctuelles du site pilote sont ouvertes dans l'application.
+- Un dossier déjà ouvert dans Power Apps y est terminé par son équipe habituelle : pas de ressaisie systématique, pas de réouverture, pas de deuxième notification.
+- Les salariés déjà présents peuvent avoir leur fiche et leurs biens repris, sans recréer leurs anciens dossiers.
+- Les exemples et le détail sont dans `docs/pilote.md`. Cette règle ne valide pas l'abandon des liens historiques (T08).
+- Fonctions ouvertes : personnel, profils, arrivées, Mon travail, formations, demandes ponctuelles, parc IT, remises, restitutions, décharges, scans, Excel ; reprise SharePoint pour l'ADMIN.
+- Fonctions fermées : véhicules, logiciels, étiquettes et campagnes QR, mutation, départ, états (`MODULES_DESACTIVES=pilote`). Un besoin véhicule ne crée aucune tâche pendant le pilote.
+- Anciennes décharges signées : elles restent dans SharePoint, sans import ni PDF régénéré.
+  - Avec une référence fiable, l'application l'affiche aux RH, ADMIN et IT.
+  - Sinon, elle indique « Remise reprise de SharePoint — justificatif à rechercher dans l'ancien système ».
+  - Jamais « signé » sans preuve identifiée.
+
+## Données de départ (précision du 16/11/2026)
+
+- L'ancienne application (Power Apps et SharePoint) n'a jamais été en production : aucun historique à reprendre.
+- Ses listes servent de données de départ, importées par l'ADMIN ; une liste incomplète est acceptée (site absent → « À préciser », site inconnu créé), puis chaque équipe complète ses fiches dans l'application : le RH le personnel, les profils et les wilayas ; l'IT le matériel, les accessoires, les SIM et les lignes ; la Formation le catalogue.
+- Le RH corrige directement le poste, le site et le département d'une fiche (tracé) ; la mutation reste le chemin d'un changement préparé et daté.
+- L'ADMIN règle dans l'interface les modules, l'envoi Exchange, les échéances, la sauvegarde chiffrée et les modèles de tâches.

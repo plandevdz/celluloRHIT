@@ -20,7 +20,7 @@ use crate::audit::{self, Audit};
 use crate::auth::CurrentUser;
 use crate::documents::{algiers_today, sha256_hex};
 use crate::error::{AppError, AppResult};
-use crate::personnel_xlsx::{self as xlsx, ExportRow, HEADERS};
+use crate::personnel_xlsx::{self as xlsx, ExportRow, HEADERS, OPTIONAL_HEADERS};
 use crate::routes::employees::{insert_employee, NewEmployee};
 use crate::state::AppState;
 
@@ -75,6 +75,24 @@ struct ExportDbRow {
     site_name: Option<String>,
     arrival: Option<NaiveDate>,
     department: Option<String>,
+    contract_type: Option<String>,
+    profile_name: Option<String>,
+    manager_matricule: Option<String>,
+    manager_id: Option<Uuid>,
+    manager_name: Option<String>,
+    wilaya_codes: Option<String>,
+}
+
+pub fn contract_label(code: &str) -> &'static str {
+    match code {
+        "cdi" => "CDI",
+        "cdd" => "CDD",
+        "stage" => "Stage",
+        "interim" => "Intérim",
+        "apprentissage" => "Apprentissage",
+        "consultant" => "Consultant",
+        _ => "",
+    }
 }
 
 /// Export au format du modèle (réimportable : l'ID permet la mise à jour).
@@ -82,10 +100,16 @@ async fn export(State(state): State<AppState>, user: CurrentUser, Query(q): Quer
     user.require(domain::roles::HR_MANAGERS)?;
     let rows = sqlx::query_as::<_, ExportDbRow>(
         "SELECT e.id, e.matricule, e.first_name, e.last_name, p.job_title, s.name AS site_name,
-                coalesce(e.actual_arrival, e.planned_arrival) AS arrival, p.department
+                coalesce(e.actual_arrival, e.planned_arrival) AS arrival, p.department,
+                e.contract_type, jp.name AS profile_name, m.matricule AS manager_matricule, m.id AS manager_id,
+                coalesce(m.first_name || ' ' || m.last_name, p.manager) AS manager_name,
+                (SELECT string_agg(w.code::text || ' ' || w.name, '; ' ORDER BY w.code)
+                   FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilaya_codes
            FROM employees e
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
+           LEFT JOIN job_profiles jp ON jp.id = p.job_profile_id
+           LEFT JOIN employees m ON m.id = p.manager_employee_id
           WHERE ($1::text IS NULL OR e.status = $1) AND ($2::uuid IS NULL OR p.site_id = $2)
           ORDER BY e.last_name, e.first_name",
     )
@@ -104,6 +128,12 @@ async fn export(State(state): State<AppState>, user: CurrentUser, Query(q): Quer
             site: r.site_name,
             arrival: r.arrival,
             department: r.department,
+            contract: r.contract_type.as_deref().map(|c| contract_label(c).to_string()),
+            profile: r.profile_name,
+            manager_matricule: r.manager_matricule,
+            manager_id: r.manager_id.map(|i| i.to_string()),
+            manager_name: r.manager_name,
+            wilayas: r.wilaya_codes,
         })
         .collect();
     let count = export.len();
@@ -137,6 +167,18 @@ struct RowData {
     site_id: Option<Uuid>,
     arrival: Option<NaiveDate>,
     department: Option<String>,
+    /// Code du contrat (cdi…), si renseigné.
+    contract: Option<String>,
+    profile: Option<String>,
+    profile_id: Option<Uuid>,
+    manager_name: Option<String>,
+    /// Manager identifié (ID ou matricule d'une fiche existante).
+    manager_employee_id: Option<Uuid>,
+    /// Manager créé par une autre ligne du même classeur : relié après coup.
+    manager_pending_matricule: Option<String>,
+    /// `Some(vec![])` : « aucune » (retirer toutes les wilayas).
+    wilaya_ids: Option<Vec<Uuid>>,
+    wilayas_text: Option<String>,
 }
 
 impl RowData {
@@ -167,12 +209,25 @@ struct Emp {
     department: Option<String>,
     actual_arrival: Option<NaiveDate>,
     planned_arrival: Option<NaiveDate>,
+    contract_type: Option<String>,
+    job_profile_id: Option<Uuid>,
+    profile_name: Option<String>,
+    manager_employee_id: Option<Uuid>,
+    manager_label: Option<String>,
+    wilaya_ids: Vec<Uuid>,
+    wilaya_codes: Option<String>,
 }
 
 const EMP_SELECT: &str = "SELECT e.id, e.matricule, e.matricule_norm, e.first_name, e.last_name, e.name_key, e.status, e.version,
-            p.job_title, p.site_id, s.name AS site_name, p.department, e.actual_arrival, e.planned_arrival
+            p.job_title, p.site_id, s.name AS site_name, p.department, e.actual_arrival, e.planned_arrival,
+            e.contract_type, p.job_profile_id, (SELECT name FROM job_profiles WHERE id = p.job_profile_id) AS profile_name,
+            p.manager_employee_id,
+            coalesce((SELECT m.first_name || ' ' || m.last_name FROM employees m WHERE m.id = p.manager_employee_id), p.manager) AS manager_label,
+            coalesce((SELECT array_agg(ew.wilaya_id ORDER BY ew.wilaya_id) FROM employee_wilayas ew WHERE ew.employee_id = e.id), '{}') AS wilaya_ids,
+            (SELECT string_agg(w.code::text, '; ' ORDER BY w.code) FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id
+              WHERE ew.employee_id = e.id) AS wilaya_codes
        FROM employees e
-       LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+       LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
        LEFT JOIN sites s ON s.id = p.site_id";
 
 impl Emp {
@@ -248,7 +303,41 @@ fn diff(e: &Emp, d: &RowData) -> serde_json::Map<String, Value> {
     if let Some(v) = d.arrival {
         put("Date d’arrivée", json!(e.arrival()), json!(v));
     }
+    if let Some(v) = &d.contract {
+        put("Contrat", json!(e.contract_type.as_deref().map(contract_label)), json!(contract_label(v)));
+    }
+    if d.profile_id.is_some() && d.profile_id != e.job_profile_id {
+        put("Profil de poste", json!(e.profile_name), json!(d.profile));
+    }
+    if d.manager_employee_id.is_some() && d.manager_employee_id != e.manager_employee_id {
+        put("Manager", json!(e.manager_label), json!(d.manager_name.clone().unwrap_or_else(|| "(fiche identifiée)".into())));
+    }
+    if let Some(m) = &d.manager_pending_matricule {
+        put("Manager", json!(e.manager_label), json!(format!("matricule {m} (créé par ce classeur)")));
+    }
+    if let Some(ws) = &d.wilaya_ids {
+        let mut sorted = ws.clone();
+        sorted.sort();
+        sorted.dedup();
+        if sorted != e.wilaya_ids {
+            put("Wilayas", json!(e.wilaya_codes), json!(d.wilayas_text));
+        }
+    }
     ch
+}
+
+/// Référentiels utiles à l'aperçu.
+pub struct Refs {
+    pub profiles: Vec<(Uuid, String, bool)>,
+    pub wilayas: Vec<(Uuid, i32)>,
+}
+
+fn header_name(i: usize) -> &'static str {
+    if i < HEADERS.len() {
+        HEADERS[i]
+    } else {
+        OPTIONAL_HEADERS[i - HEADERS.len()]
+    }
 }
 
 struct Analysed {
@@ -271,7 +360,13 @@ fn find_site(sites: &[(Uuid, String, String)], label: &str) -> Option<Uuid> {
 }
 
 /// Analyse d'un classeur : aucune écriture métier, seulement des propositions.
-fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[Emp], today: NaiveDate) -> Vec<Analysed> {
+fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[Emp], refs: &Refs, today: NaiveDate) -> Vec<Analysed> {
+    // Matricules présents dans le classeur : un manager peut être créé par
+    // une autre ligne du même fichier.
+    let file_matricules: Vec<String> = rows
+        .iter()
+        .filter_map(|r| r.cells.get(xlsx::COL_MATRICULE).and_then(|c| c.text.as_deref()).and_then(domain::text::normalize_matricule))
+        .collect();
     let by_id: HashMap<Uuid, &Emp> = emps.iter().map(|e| (e.id, e)).collect();
     let by_mat: HashMap<&str, &Emp> = emps.iter().filter_map(|e| e.matricule_norm.as_deref().map(|m| (m, e))).collect();
     let mut by_name: HashMap<&str, Vec<&Emp>> = HashMap::new();
@@ -285,10 +380,10 @@ fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[
         let mut messages = Vec::new();
         for (i, cell) in c.iter().enumerate() {
             if cell.formula {
-                messages.push(msg("erreur", format!("{} : les formules sont refusées, saisissez la valeur", HEADERS[i])));
+                messages.push(msg("erreur", format!("{} : les formules sont refusées, saisissez la valeur", header_name(i))));
             }
             if cell.error {
-                messages.push(msg("erreur", format!("{} : cellule en erreur (#N/A, #REF!…)", HEADERS[i])));
+                messages.push(msg("erreur", format!("{} : cellule en erreur (#N/A, #REF!…)", header_name(i))));
             }
         }
         let text = |i: usize| if c[i].formula { None } else { c[i].text.clone() };
@@ -322,6 +417,106 @@ fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[
                 None => messages.push(msg("erreur", format!("Date d’arrivée illisible : « {t} » (attendu jj/mm/aaaa)"))),
             }
         }
+        // Contrat, profil, manager, wilayas (colonnes facultatives).
+        if let Some(c) = text(xlsx::COL_CONTRAT) {
+            match domain::legacy::contract_type(&c) {
+                Some(code) => d.contract = Some(code.to_string()),
+                None => messages.push(msg("erreur", format!("Contrat « {c} » inconnu (CDI, CDD, Stage, Intérim, Apprentissage, Consultant)"))),
+            }
+        }
+        if let Some(pr) = text(xlsx::COL_PROFIL) {
+            let f = domain::legacy::fold(&pr);
+            match refs.profiles.iter().find(|(_, n, _)| domain::legacy::fold(n) == f) {
+                Some((id, name, active)) => {
+                    d.profile = Some(name.clone());
+                    d.profile_id = Some(*id);
+                    if !active {
+                        d.profile = Some(format!("{name} (inactif)"));
+                    }
+                }
+                None => messages.push(msg("erreur", format!("Profil de poste « {pr} » inconnu : créez-le ou corrigez l'intitulé"))),
+            }
+        }
+        d.manager_name = text(xlsx::COL_MGR_NOM);
+        let mgr_by_id = match text(xlsx::COL_MGR_ID) {
+            None => None,
+            Some(raw) => match Uuid::parse_str(raw.trim()) {
+                Ok(id) => match by_id.get(&id) {
+                    Some(m) => Some(*m),
+                    None => {
+                        messages.push(msg("erreur", "Manager (ID salarié) inconnu dans l'application"));
+                        None
+                    }
+                },
+                Err(_) => {
+                    messages.push(msg("erreur", format!("Manager (ID salarié) invalide : « {raw} »")));
+                    None
+                }
+            },
+        };
+        let mgr_mat = text(xlsx::COL_MGR_MATRICULE);
+        if mgr_mat.is_some() && c[xlsx::COL_MGR_MATRICULE].numeric {
+            messages.push(msg("erreur", "Manager (matricule) saisi comme nombre : formatez la colonne en Texte"));
+        }
+        let mgr_by_mat = match mgr_mat.as_deref().and_then(domain::text::normalize_matricule) {
+            None => None,
+            Some(m) => match by_mat.get(m.as_str()) {
+                Some(e) => Some(*e),
+                None if file_matricules.contains(&m) => {
+                    d.manager_pending_matricule = Some(m.clone());
+                    None
+                }
+                None => {
+                    messages.push(msg("erreur", format!("Manager : aucun salarié de matricule {m}")));
+                    None
+                }
+            },
+        };
+        match (mgr_by_id, mgr_by_mat) {
+            (Some(a), Some(b)) if a.id != b.id => {
+                messages.push(msg("erreur", "Manager : l'ID et le matricule désignent deux personnes différentes"));
+            }
+            (Some(m), _) | (None, Some(m)) => {
+                d.manager_employee_id = Some(m.id);
+                d.manager_name = Some(format!("{} {}", m.first_name, m.last_name));
+            }
+            (None, None) => {
+                if let (Some(name), None) = (&d.manager_name, &d.manager_pending_matricule) {
+                    // Le nom seul n'identifie jamais une personne.
+                    let key_words: Vec<&str> = name.split_whitespace().collect();
+                    let key = if key_words.len() >= 2 {
+                        domain::text::name_key(key_words[0], &key_words[1..].join(" "))
+                    } else {
+                        domain::text::name_key(name, "")
+                    };
+                    let homonyms = by_name.get(key.as_str()).map(|v| v.len()).unwrap_or(0);
+                    if homonyms != 1 || d.id.is_none() {
+                        messages.push(msg(
+                            "attention",
+                            format!(
+                                "Manager « {name} » indiqué par son seul nom ({homonyms} fiche(s) de ce nom) : non modifié. Renseignez « Manager (matricule) » ou « Manager (ID salarié) »."
+                            ),
+                        ));
+                    }
+                }
+            }
+        }
+        if let Some(w) = text(xlsx::COL_WILAYAS) {
+            d.wilayas_text = Some(w.clone());
+            if domain::legacy::fold(&w) == "aucune" {
+                d.wilaya_ids = Some(vec![]);
+            } else {
+                let mut ids = Vec::new();
+                for item in w.split([';', ',']).map(str::trim).filter(|s| !s.is_empty()) {
+                    let code: String = item.chars().take_while(|c| c.is_ascii_digit()).collect();
+                    match code.parse::<i32>().ok().and_then(|c| refs.wilayas.iter().find(|(_, wc)| *wc == c)) {
+                        Some((id, _)) => ids.push(*id),
+                        None => messages.push(msg("erreur", format!("Wilaya « {item} » inconnue : indiquez son code (ex. 16)"))),
+                    }
+                }
+                d.wilaya_ids = Some(ids);
+            }
+        }
         if let Some(s) = &d.site {
             match find_site(sites, s) {
                 Some(id) => d.site_id = Some(id),
@@ -341,6 +536,9 @@ fn analyse(rows: Vec<xlsx::SheetRow>, sites: &[(Uuid, String, String)], emps: &[
             candidates: vec![],
             changes: serde_json::Map::new(),
         };
+        if a.data.id.is_some() && a.data.manager_employee_id == a.data.id {
+            a.messages.push(msg("erreur", "Un salarié ne peut pas être son propre manager"));
+        }
         let has_error = a.messages.iter().any(|m| m["niveau"] == "erreur");
         if !has_error {
             let mat = d.matricule_norm();
@@ -482,7 +680,7 @@ async fn preview(State(state): State<AppState>, user: CurrentUser, mut multipart
         }
     }
     let (file_name, bytes) = file.ok_or_else(|| AppError::invalid("file", "fichier manquant"))?;
-    if bytes.is_empty() || bytes.len() > state.config.max_upload_bytes {
+    if bytes.is_empty() || bytes.len() > state.cfg().max_upload_bytes {
         return Err(AppError::invalid("file", "fichier vide ou trop volumineux"));
     }
     if !bytes.starts_with(b"PK\x03\x04") {
@@ -501,7 +699,11 @@ async fn preview(State(state): State<AppState>, user: CurrentUser, mut multipart
     let mut tx = state.pool.begin().await?;
     let sites = load_sites(&mut tx).await?;
     let emps = sqlx::query_as::<_, Emp>(EMP_SELECT).fetch_all(&mut *tx).await?;
-    let analysed = analyse(rows, &sites, &emps, algiers_today());
+    let refs = Refs {
+        profiles: sqlx::query_as("SELECT id, name, active FROM job_profiles").fetch_all(&mut *tx).await?,
+        wilayas: sqlx::query_as("SELECT id, code FROM wilayas").fetch_all(&mut *tx).await?,
+    };
+    let analysed = analyse(rows, &sites, &emps, &refs, algiers_today());
     let batch_id: Uuid = sqlx::query_scalar(
         "INSERT INTO import_batches (created_by, file_name, file_sha256, format_version) VALUES ($1, $2, $3, $4) RETURNING id",
     )
@@ -732,6 +934,7 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     .await?;
     let today = algiers_today();
     let mut counts: HashMap<&'static str, i64> = HashMap::new();
+    let mut pending_managers: Vec<(Uuid, String)> = Vec::new();
     for (row_number, raw, proposal, matched, version, decision, decision_emp) in rows {
         let data: RowData = serde_json::from_value(raw).map_err(anyhow::Error::from)?;
         let action = match (proposal.as_str(), decision.as_deref()) {
@@ -758,6 +961,9 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
                 match outcome {
                     Ok((r, e)) => {
                         sqlx::query("RELEASE SAVEPOINT import_ligne").execute(&mut *tx).await?;
+                        if let Some(m) = &data.manager_pending_matricule {
+                            pending_managers.push((e, m.clone()));
+                        }
                         (r, Some(e), None)
                     }
                     Err(e) => {
@@ -778,6 +984,24 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
         .bind(&message)
         .execute(&mut *tx)
         .await?;
+    }
+    // Managers créés par ce même classeur : reliés une fois toutes les
+    // lignes appliquées (par matricule exact, jamais par le nom).
+    for (emp, matricule) in &pending_managers {
+        let manager: Option<(Uuid, String)> =
+            sqlx::query_as("SELECT id, first_name || ' ' || last_name FROM employees WHERE matricule_norm = $1 AND id <> $2")
+                .bind(matricule)
+                .bind(emp)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if let Some((m, name)) = manager {
+            sqlx::query("UPDATE employee_positions SET manager_employee_id = $2, manager = $3 WHERE employee_id = $1 AND valid_to IS NULL")
+                .bind(emp)
+                .bind(m)
+                .bind(&name)
+                .execute(&mut *tx)
+                .await?;
+        }
     }
     let summary = json!(counts);
     sqlx::query(
@@ -839,6 +1063,7 @@ async fn create(conn: &mut PgConnection, user: &CurrentUser, d: &RowData, today:
             .execute(&mut *conn)
             .await?;
     }
+    apply_extras(conn, id, d).await?;
     audit::record(
         conn,
         user,
@@ -874,6 +1099,9 @@ async fn update(
     let changes = diff(&e, d);
     if changes.is_empty() {
         return Ok(false);
+    }
+    if d.manager_employee_id == Some(employee_id) {
+        return Err(AppError::invalid("manager", "un salarié ne peut pas être son propre manager"));
     }
     let first = d.first_name.clone().unwrap_or(e.first_name.clone());
     let last = d.last_name.clone().unwrap_or(e.last_name.clone());
@@ -942,19 +1170,26 @@ async fn update(
                         .execute(&mut *conn)
                         .await?;
                 }
+                // La nouvelle situation reprend le manager et le profil en cours.
                 sqlx::query(
-                    "INSERT INTO employee_positions (employee_id, job_title, site_id, department, valid_from) VALUES ($1, $2, $3, $4, $5)",
+                    "INSERT INTO employee_positions (employee_id, job_title, site_id, department, valid_from, manager, manager_employee_id, job_profile_id)
+                     VALUES ($1, $2, $3, $4, $5,
+                             (SELECT manager FROM employee_positions WHERE id = $6),
+                             (SELECT manager_employee_id FROM employee_positions WHERE id = $6),
+                             (SELECT job_profile_id FROM employee_positions WHERE id = $6))",
                 )
                 .bind(employee_id)
                 .bind(&job)
                 .bind(site)
                 .bind(&dept)
                 .bind(today)
+                .bind(other.map(|o| o.0))
                 .execute(&mut *conn)
                 .await?;
             }
         }
     }
+    apply_extras(conn, employee_id, d).await?;
     audit::record(
         conn,
         user,
@@ -969,4 +1204,41 @@ async fn update(
     )
     .await?;
     Ok(true)
+}
+
+/// Contrat, profil, manager et wilayas : seules les valeurs renseignées
+/// sont écrites (une cellule vide conserve l'existant).
+async fn apply_extras(conn: &mut PgConnection, employee_id: Uuid, d: &RowData) -> AppResult<()> {
+    if let Some(c) = &d.contract {
+        sqlx::query("UPDATE employees SET contract_type = $2 WHERE id = $1").bind(employee_id).bind(c).execute(&mut *conn).await?;
+    }
+    if let Some(p) = d.profile_id {
+        sqlx::query("UPDATE employee_positions SET job_profile_id = $2 WHERE employee_id = $1 AND valid_to IS NULL")
+            .bind(employee_id)
+            .bind(p)
+            .execute(&mut *conn)
+            .await?;
+    }
+    if let Some(m) = d.manager_employee_id {
+        sqlx::query(
+            "UPDATE employee_positions SET manager_employee_id = $2,
+                    manager = (SELECT first_name || ' ' || last_name FROM employees WHERE id = $2)
+              WHERE employee_id = $1 AND valid_to IS NULL",
+        )
+        .bind(employee_id)
+        .bind(m)
+        .execute(&mut *conn)
+        .await?;
+    }
+    if let Some(ws) = &d.wilaya_ids {
+        sqlx::query("DELETE FROM employee_wilayas WHERE employee_id = $1").bind(employee_id).execute(&mut *conn).await?;
+        for w in ws {
+            sqlx::query("INSERT INTO employee_wilayas (employee_id, wilaya_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+                .bind(employee_id)
+                .bind(w)
+                .execute(&mut *conn)
+                .await?;
+        }
+    }
+    Ok(())
 }

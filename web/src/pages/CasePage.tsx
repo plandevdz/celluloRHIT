@@ -10,6 +10,7 @@ import {
   caseStatusLabel,
   deliveryStatusLabel,
   employeeStatusLabel,
+  EQUIPMENT_NEEDS,
   fmtDate,
   fmtDateTime,
   needLabel,
@@ -23,6 +24,7 @@ import {
 import { CompleteTaskDialog, ConfirmArrivalDialog } from "./TaskDialogs";
 import { DocumentActions } from "./DocumentActions";
 import { emptyNeeds, NeedsEditor, needsPayload, NeedValue, TrainingValue } from "./NeedsEditor";
+import { DeparturePanel, TransferPanel } from "./TransitionPanels";
 
 type CaseDetail = {
   case: any;
@@ -33,13 +35,15 @@ type CaseDetail = {
   children: any[];
   history: any[];
   notifications: any[];
+  transfer: any | null;
+  departure: any | null;
   scope: "complet" | "equipe";
   mail_mode: string;
 };
 
 export default function CasePage() {
   const { reference = "" } = useParams();
-  const { user, has } = useAuth();
+  const { user, has, on } = useAuth();
   const detail = useLoad(() => api<CaseDetail>(`/cases/${encodeURIComponent(reference)}`), [reference]);
   const cmd = useCommand();
   const [dialog, setDialog] = useState<
@@ -91,9 +95,11 @@ export default function CasePage() {
             )}
             {isHr && isOpen && (
               <>
-                <button className="btn" onClick={() => setDialog({ kind: "needs" })}>
-                  Compléter la demande
-                </button>
+                {["ONB", "DEM"].includes(c.kind) && (
+                  <button className="btn" onClick={() => setDialog({ kind: "needs" })}>
+                    Compléter la demande
+                  </button>
+                )}
                 <button className="btn" onClick={() => setDialog({ kind: "close" })}>
                   Clôturer
                 </button>
@@ -108,6 +114,16 @@ export default function CasePage() {
       {scope === "equipe" && (
         <p className="small muted">Vue limitée aux éléments utiles à votre équipe.</p>
       )}
+      {detail.data.transfer && (
+        <div style={{ marginBottom: "1rem" }}>
+          <TransferPanel t={detail.data.transfer} onChange={detail.reload} />
+        </div>
+      )}
+      {detail.data.departure && (
+        <div style={{ marginBottom: "1rem" }}>
+          <DeparturePanel c={c} d={detail.data.departure} onChange={detail.reload} />
+        </div>
+      )}
 
       <div className="grid-2">
         <div className="stack">
@@ -117,7 +133,7 @@ export default function CasePage() {
             ) : (
               <table>
                 <tbody>
-                  {needs.map((n) => (
+                  {needs.filter((n) => n.category !== "vehicule" || on("vehicules") || n.answer !== "a_preciser").map((n) => (
                     <tr key={n.id}>
                       <td>
                         <strong>{needLabel[n.category]}</strong>
@@ -141,8 +157,26 @@ export default function CasePage() {
                       </td>
                       <td className="small">
                         {n.preference && <div>Demandé : {preferenceLabel[n.preference]}</div>}
-                        {n.quantity && <div>Quantité : {n.quantity}</div>}
+                        {n.quantity && <div>Quantité demandée : {n.quantity}</div>}
                         {n.detail && <div>{n.detail}</div>}
+                        {n.origin === "profil" && <div className="muted">suggéré par le profil</div>}
+                        {n.answer === "oui" && n.delivered !== undefined && EQUIPMENT_NEEDS.includes(n.category) && (
+                          <div>
+                            <strong>
+                              {deliveredText(n.category, n.delivered, n.quantity ?? 1)}
+                            </strong>
+                            {n.category === "pc" &&
+                              n.preference &&
+                              n.delivered_kinds?.some((k: string) => k !== `pc_${n.preference}`) &&
+                              ["fixe", "portable"].includes(n.preference) && (
+                                <div>
+                                  {n.delivered_kinds.includes("pc_portable") ? "Portable" : "PC fixe"} remis à la place du{" "}
+                                  {n.preference === "fixe" ? "fixe" : "portable"}
+                                </div>
+                              )}
+                            {n.delivered_items?.length > 0 && <div className="muted">{n.delivered_items.join(" · ")}</div>}
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -197,6 +231,7 @@ export default function CasePage() {
                         {t.trainer ?? "File Formation"}
                         {t.planned_date && <div>Prévue le {fmtDate(t.planned_date)}</div>}
                         {t.done_date && <div>Réalisée le {fmtDate(t.done_date)}</div>}
+                        {t.recorded_by && <div className="muted">enregistrée par {t.recorded_by}</div>}
                         {t.reason && <div>Motif : {t.reason}</div>}
                       </td>
                     </tr>
@@ -221,9 +256,21 @@ export default function CasePage() {
                       <tr key={t.id}>
                         <td>
                           <strong>{t.title}</strong>
+                          {t.instructions && (
+                            <details className="small">
+                              <summary>Consignes</summary>
+                              <div style={{ whiteSpace: "pre-wrap" }}>{t.instructions}</div>
+                            </details>
+                          )}
                           <div className="small muted">
-                            {roleLabel[t.role]} · échéance {fmtDate(t.due_date)}
+                            {roleLabel[t.role]} · échéance {t.due_at ? fmtDateTime(t.due_at) : fmtDate(t.due_date)}
                           </div>
+                          {t.not_before && t.status !== "termine" && t.status !== "annule" && (
+                            <div className="small">
+                              {new Date(t.not_before) > new Date() ? `Exigible à partir du ${fmtDateTime(t.not_before)}` : "Exigible maintenant"}
+                              {t.escalated_at && <span style={{ color: "var(--danger)" }}> · relancée : accès à vérifier</span>}
+                            </div>
+                          )}
                           {t.blocked_reason && t.status === "bloque" && <div className="small">En attente : {t.blocked_reason}</div>}
                           {t.done_note && <div className="small">Observation : {t.done_note}</div>}
                         </td>
@@ -259,11 +306,12 @@ export default function CasePage() {
                           {mine && t.status === "en_cours" && (
                             <div className="row">
                               <TaskShortcut task={t} c={c} />
-                              {t.need_category !== null && (
+                              {!t.training_session_id && !t.exit_control_id && (
                                 <button className="btn btn-small" onClick={() => setDialog({ kind: "complete", task: t })}>
                                   Terminer
                                 </button>
                               )}
+                              {t.exit_control_id && <span className="small muted">À confirmer dans le panneau Départ</span>}
                               <button className="btn btn-small" onClick={() => setDialog({ kind: "block", task: t })}>
                                 Mettre en attente
                               </button>
@@ -398,7 +446,7 @@ export default function CasePage() {
 /** Raccourci vers l'écran qui réalise concrètement la tâche. */
 function TaskShortcut({ task, c }: { task: any; c: any }) {
   const q = new URLSearchParams({ salarie: c.employee_id, dossier: c.id, tache: task.id });
-  if (["pc", "telephone", "sim"].includes(task.need_category)) {
+  if (EQUIPMENT_NEEDS.includes(task.need_category)) {
     return (
       <Link className="btn btn-primary btn-small" to={`/parc/remise?${q}`}>
         Remettre le matériel
@@ -412,7 +460,15 @@ function TaskShortcut({ task, c }: { task: any; c: any }) {
       </Link>
     );
   }
-  if (task.need_category === null) {
+  if (task.need_category === "vehicule") {
+    const v = new URLSearchParams({ salarie: c.employee_id, nom: `${c.first_name} ${c.last_name}`, dossier: c.id, tache: task.id });
+    return (
+      <Link className="btn btn-primary btn-small" to={`/vehicules?${v}`}>
+        Remettre un véhicule
+      </Link>
+    );
+  }
+  if (task.training_session_id) {
     return (
       <Link className="btn btn-primary btn-small" to="/formations">
         Gérer la session
@@ -506,4 +562,23 @@ function CloseDialog({ c, isAdmin, onClose, onDone }: { c: any; isAdmin: boolean
       </div>
     </Modal>
   );
+}
+
+/** « Rien remis », « SIM remise », « 1 écran sur 2 remis » : quantités lisibles, accord compris. */
+function deliveredText(category: string, delivered: number, wanted: number): string {
+  if (delivered === 0) return "Rien remis pour l'instant";
+  const fem = ["sim", "tablette", "imprimante"].includes(category);
+  const word: Record<string, [string, string]> = {
+    pc: ["PC", "PC"],
+    ecran: ["écran", "écrans"],
+    tablette: ["tablette", "tablettes"],
+    imprimante: ["imprimante", "imprimantes"],
+    accessoire: ["accessoire", "accessoires"],
+    telephone: ["téléphone", "téléphones"],
+    sim: ["SIM", "SIM"],
+  };
+  const [one, many] = word[category] ?? [category, category];
+  const done = fem ? (delivered > 1 ? "remises" : "remise") : "remis";
+  if (wanted <= 1 && delivered >= 1) return `${one.charAt(0).toUpperCase()}${one.slice(1)} ${done}`;
+  return `${delivered} ${delivered > 1 ? many : one} sur ${wanted} ${done}`;
 }

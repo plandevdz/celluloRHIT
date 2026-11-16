@@ -16,6 +16,7 @@ use crate::state::AppState;
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/trainings/catalog", get(catalog).post(add_catalog))
+        .route("/trainings/catalog/{id}", axum::routing::patch(update_catalog))
         .route("/trainings/sessions", get(sessions))
         .route("/trainings/sessions/{id}", post(update_session))
 }
@@ -25,28 +26,111 @@ struct CatalogRow {
     id: Uuid,
     name: String,
     active: bool,
+    category: Option<String>,
+    duration_hours: Option<f64>,
+    description: Option<String>,
+    support_url: Option<String>,
+    default_trainer_id: Option<Uuid>,
+    default_trainer: Option<String>,
+    default_trainer_name: Option<String>,
 }
 
 async fn catalog(State(state): State<AppState>, _user: CurrentUser) -> AppResult<Json<Vec<CatalogRow>>> {
-    let rows = sqlx::query_as::<_, CatalogRow>("SELECT id, name, active FROM training_catalog ORDER BY name")
-        .fetch_all(&state.pool)
-        .await?;
+    let rows = sqlx::query_as::<_, CatalogRow>(
+        "SELECT c.id, c.name, c.active, c.category, c.duration_hours::float8 AS duration_hours, c.description, c.support_url,
+                c.default_trainer_id, u.display_name AS default_trainer, c.default_trainer_name
+           FROM training_catalog c LEFT JOIN users u ON u.id = c.default_trainer_id ORDER BY c.name",
+    )
+    .fetch_all(&state.pool)
+    .await?;
     Ok(Json(rows))
 }
 
 #[derive(Deserialize)]
 struct CatalogInput {
     name: String,
+    category: Option<String>,
+    duration_hours: Option<f64>,
+    description: Option<String>,
+    support_url: Option<String>,
+    default_trainer_id: Option<Uuid>,
+    /// Intervenant par défaut sans compte (nom libre).
+    default_trainer_name: Option<String>,
+    active: Option<bool>,
+}
+
+fn check_category(c: &Option<String>) -> AppResult<Option<String>> {
+    match c.as_deref().filter(|s| !s.is_empty()) {
+        None => Ok(None),
+        Some(v @ ("produit" | "solution_digitale" | "qhse" | "autre")) => Ok(Some(v.to_string())),
+        Some(_) => Err(AppError::invalid("category", "catégorie inconnue")),
+    }
+}
+
+async fn check_trainer(conn: &mut sqlx::PgConnection, id: Option<Uuid>) -> AppResult<()> {
+    if let Some(t) = id {
+        let ok: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM users u JOIN user_roles r ON r.user_id = u.id WHERE u.id = $1 AND u.active AND r.role = 'FORMATION')",
+        )
+        .bind(t)
+        .fetch_one(conn)
+        .await?;
+        if !ok {
+            return Err(AppError::invalid("default_trainer_id", "intervenant actif habilité FORMATION requis"));
+        }
+    }
+    Ok(())
+}
+
+async fn update_catalog(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<CatalogInput>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Formation, Role::Admin])?;
+    let name = domain::text::clean(&i.name).ok_or_else(|| AppError::invalid("name", "intitulé obligatoire"))?;
+    let category = check_category(&i.category)?;
+    let mut tx = state.pool.begin().await?;
+    check_trainer(&mut tx, i.default_trainer_id).await?;
+    let n = sqlx::query(
+        "UPDATE training_catalog SET name = $2, category = $3, duration_hours = $4, description = $5, support_url = $6,
+                default_trainer_id = $7, active = coalesce($8, active), default_trainer_name = $9 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&name)
+    .bind(&category)
+    .bind(i.duration_hours)
+    .bind(i.description.as_deref().and_then(domain::text::clean))
+    .bind(i.support_url.as_deref().and_then(domain::text::clean))
+    .bind(i.default_trainer_id)
+    .bind(i.active)
+    .bind(i.default_trainer_name.as_deref().and_then(domain::text::clean))
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("formation"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "formation_catalogue_modifiee", entity: "training_catalog", entity_id: Some(id), data: Some(json!({ "name": name, "active": i.active })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
 }
 
 async fn add_catalog(State(state): State<AppState>, user: CurrentUser, Json(i): Json<CatalogInput>) -> AppResult<Json<Value>> {
     user.require(&[Role::Formation, Role::Admin])?;
     let name = domain::text::clean(&i.name).ok_or_else(|| AppError::invalid("name", "intitulé obligatoire"))?;
+    let category = check_category(&i.category)?;
     let mut tx = state.pool.begin().await?;
-    let id: Uuid = sqlx::query_scalar("INSERT INTO training_catalog (name) VALUES ($1) RETURNING id")
-        .bind(&name)
-        .fetch_one(&mut *tx)
-        .await?;
+    check_trainer(&mut tx, i.default_trainer_id).await?;
+    let id: Uuid = sqlx::query_scalar(
+        "INSERT INTO training_catalog (name, category, duration_hours, description, support_url, default_trainer_id, default_trainer_name)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
+    )
+    .bind(&name)
+    .bind(&category)
+    .bind(i.duration_hours)
+    .bind(i.description.as_deref().and_then(domain::text::clean))
+    .bind(i.support_url.as_deref().and_then(domain::text::clean))
+    .bind(i.default_trainer_id)
+    .bind(i.default_trainer_name.as_deref().and_then(domain::text::clean))
+    .fetch_one(&mut *tx)
+    .await?;
     audit::record(&mut tx, &user, Audit { action: "formation_catalogue", entity: "training_catalog", entity_id: Some(id), data: Some(json!({ "name": name })), ..Default::default() }).await?;
     tx.commit().await?;
     Ok(Json(json!({ "id": id })))
@@ -64,11 +148,16 @@ struct SessionRow {
     name: String,
     status: String,
     trainer_id: Option<Uuid>,
+    /// Qui a animé : compte FORMATION, sinon nom libre.
     trainer: Option<String>,
+    trainer_name: Option<String>,
+    /// Qui a enregistré la réalisation (ou la dispense) dans l'application.
+    recorded_by: Option<String>,
     planned_date: Option<NaiveDate>,
     done_date: Option<NaiveDate>,
     reason: Option<String>,
     result: Option<String>,
+    evaluation: Option<String>,
     employee_id: Uuid,
     employee_name: String,
     site_name: Option<String>,
@@ -85,15 +174,17 @@ async fn sessions(State(state): State<AppState>, user: CurrentUser, Query(q): Qu
         Some(s) => vec![s],
     };
     let rows = sqlx::query_as::<_, SessionRow>(
-        "SELECT s.id, tc.name, s.status, s.trainer_id, u.display_name AS trainer, s.planned_date, s.done_date,
-                s.reason, s.result, e.id AS employee_id, e.first_name || ' ' || e.last_name AS employee_name,
+        "SELECT s.id, tc.name, s.status, s.trainer_id, coalesce(s.trainer_name, u.display_name) AS trainer, s.trainer_name,
+                rb.display_name AS recorded_by, s.planned_date, s.done_date,
+                s.reason, s.result, s.evaluation, e.id AS employee_id, e.first_name || ' ' || e.last_name AS employee_name,
                 si.name AS site_name, c.reference AS case_reference, coalesce(c.due_date, c.effective_date) AS due_date
            FROM training_sessions s
            JOIN training_catalog tc ON tc.id = s.catalog_id
            JOIN employees e ON e.id = s.employee_id
-           LEFT JOIN employee_positions p ON p.employee_id = e.id AND p.valid_to IS NULL
+           LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites si ON si.id = p.site_id
            LEFT JOIN users u ON u.id = s.trainer_id
+           LEFT JOIN users rb ON rb.id = s.recorded_by
            LEFT JOIN cases c ON c.id = s.case_id
           WHERE s.status = ANY($1) AND (NOT $2 OR s.trainer_id = $3)
           ORDER BY s.planned_date NULLS FIRST, due_date NULLS LAST",
@@ -114,6 +205,11 @@ struct SessionUpdate {
     reason: Option<String>,
     result: Option<String>,
     trainer_id: Option<Uuid>,
+    /// Personne qui a animé, sans compte applicatif (ex. intervenant externe).
+    /// Son nom est conservé ; aucun compte n'est créé pour elle.
+    trainer_name: Option<String>,
+    /// acquis | a_revoir
+    evaluation: Option<String>,
 }
 
 /// Une session vit indépendamment du reste du dossier : elle peut être
@@ -126,6 +222,7 @@ async fn update_session(
 ) -> AppResult<Json<Value>> {
     user.require(&[Role::Formation, Role::Admin, Role::Rh])?;
     let reason = i.reason.as_deref().and_then(domain::text::clean);
+    let trainer_name = i.trainer_name.as_deref().and_then(domain::text::clean);
     let mut tx = state.pool.begin().await?;
     let row: Option<(String, Option<Uuid>, Option<Uuid>, Uuid)> = sqlx::query_as(
         "SELECT status, trainer_id, case_id, employee_id FROM training_sessions WHERE id = $1 FOR UPDATE",
@@ -161,6 +258,9 @@ async fn update_session(
             }
             Some(t)
         }
+        // Un intervenant nommé sans compte n'est pas remplacé par celui qui
+        // enregistre : l'enregistreur est tracé à part (recorded_by).
+        None if trainer_name.is_some() => trainer_id,
         None => trainer_id.or(is_formation.then_some(user.id)),
     };
     let (new_status, task_status) = match i.action.as_str() {
@@ -190,10 +290,19 @@ async fn update_session(
         _ => return Err(AppError::invalid("action", "action inconnue")),
     };
     let done_date = (new_status == "realisee").then(|| i.date.unwrap_or_else(|| chrono::Utc::now().date_naive()));
+    let evaluation = match i.evaluation.as_deref().filter(|s| !s.is_empty()) {
+        None => None,
+        Some(v @ ("acquis" | "a_revoir")) => Some(v.to_string()),
+        Some(_) => return Err(AppError::invalid("evaluation", "acquis ou à revoir")),
+    };
     sqlx::query(
         "UPDATE training_sessions SET status = $2, trainer_id = $3,
                 planned_date = CASE WHEN $2 IN ('planifiee', 'reportee') THEN coalesce($4, planned_date) ELSE planned_date END,
-                done_date = $5, reason = coalesce($6, reason), result = coalesce($7, result), updated_at = now()
+                done_date = $5, reason = coalesce($6, reason), result = coalesce($7, result),
+                evaluation = coalesce($8, evaluation), updated_at = now(),
+                trainer_name = CASE WHEN $3 IS NOT NULL AND $9::text IS NULL THEN NULL ELSE coalesce($9, trainer_name) END,
+                recorded_by = CASE WHEN $2 IN ('realisee', 'dispensee') THEN $10 ELSE recorded_by END,
+                recorded_at = CASE WHEN $2 IN ('realisee', 'dispensee') THEN now() ELSE recorded_at END
           WHERE id = $1",
     )
     .bind(id)
@@ -203,6 +312,9 @@ async fn update_session(
     .bind(done_date)
     .bind(&reason)
     .bind(i.result.as_deref().and_then(domain::text::clean))
+    .bind(&evaluation)
+    .bind(&trainer_name)
+    .bind(user.id)
     .execute(&mut *tx)
     .await?;
     let task_owner = if task_status == "annule" { None } else { new_trainer.or(Some(user.id)) };
@@ -234,7 +346,7 @@ async fn update_session(
             entity_id: Some(id),
             case_id,
             employee_id: Some(employee_id),
-            data: Some(json!({ "action": i.action, "date": i.date, "motif": reason })),
+            data: Some(json!({ "action": i.action, "date": i.date, "motif": reason, "animee_par": trainer_name })),
         },
     )
     .await?;

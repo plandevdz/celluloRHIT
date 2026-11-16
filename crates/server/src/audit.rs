@@ -36,6 +36,25 @@ pub async fn record(conn: &mut PgConnection, actor: &CurrentUser, a: Audit<'_>) 
     Ok(())
 }
 
+/// Événement produit par le serveur lui-même (worker, échéance) : aucun
+/// auteur humain, une corrélation propre.
+pub async fn record_system(conn: &mut PgConnection, a: Audit<'_>) -> AppResult<()> {
+    sqlx::query(
+        "INSERT INTO audit_events (actor_id, action, entity, entity_id, case_id, employee_id, correlation_id, data)
+         VALUES (NULL, $1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(a.action)
+    .bind(a.entity)
+    .bind(a.entity_id)
+    .bind(a.case_id)
+    .bind(a.employee_id)
+    .bind(Uuid::new_v4())
+    .bind(a.data.unwrap_or_else(|| serde_json::json!({})))
+    .execute(conn)
+    .await?;
+    Ok(())
+}
+
 /// Équipes sans aucun utilisateur actif (l'avis ne pourra pas être distribué).
 pub async fn roles_without_recipient(conn: &mut PgConnection, roles: &[domain::Role]) -> AppResult<Vec<String>> {
     let codes: Vec<&str> = roles.iter().map(|r| r.as_str()).collect();

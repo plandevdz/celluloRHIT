@@ -4,6 +4,11 @@ text_enum! {
     /// Besoins qu'un RH peut exprimer pour un salarié.
     NeedCategory {
         Pc => "pc",
+        Ecran => "ecran",
+        Tablette => "tablette",
+        Imprimante => "imprimante",
+        /// Accessoire suivi en stock (chargeur, souris…), précisé en détail.
+        Accessoire => "accessoire",
         Telephone => "telephone",
         Sim => "sim",
         EmailPro => "email_pro",
@@ -38,6 +43,10 @@ impl NeedCategory {
     pub fn responsible_role(self) -> Role {
         match self {
             NeedCategory::Pc
+            | NeedCategory::Ecran
+            | NeedCategory::Tablette
+            | NeedCategory::Imprimante
+            | NeedCategory::Accessoire
             | NeedCategory::Telephone
             | NeedCategory::Sim
             | NeedCategory::EmailPro
@@ -52,6 +61,10 @@ impl NeedCategory {
     pub fn label(self) -> &'static str {
         match self {
             NeedCategory::Pc => "PC",
+            NeedCategory::Ecran => "Écran",
+            NeedCategory::Tablette => "Tablette",
+            NeedCategory::Imprimante => "Imprimante",
+            NeedCategory::Accessoire => "Accessoire",
             NeedCategory::Telephone => "Téléphone",
             NeedCategory::Sim => "SIM / ligne",
             NeedCategory::EmailPro => "Adresse email professionnelle",
@@ -67,6 +80,10 @@ impl NeedCategory {
     pub fn task_title(self) -> &'static str {
         match self {
             NeedCategory::Pc => "Préparer et remettre le PC",
+            NeedCategory::Ecran => "Remettre l'écran",
+            NeedCategory::Tablette => "Remettre la tablette",
+            NeedCategory::Imprimante => "Installer l'imprimante",
+            NeedCategory::Accessoire => "Remettre l'accessoire",
             NeedCategory::Telephone => "Fournir le téléphone",
             NeedCategory::Sim => "Fournir la SIM / ligne",
             NeedCategory::EmailPro => "Créer l'adresse email professionnelle",
@@ -92,15 +109,24 @@ pub enum Evidence {
     Equipment,
     /// Compte réellement consigné par l'IT dans le système concerné.
     Account,
-    /// Travail sans preuve matérielle (carte, véhicule géré par le RH…).
+    /// Véhicule : remise enregistrée dans le dossier ou garde active.
+    Vehicle,
+    /// Travail sans preuve matérielle (carte de visite…).
     None,
 }
 
 impl NeedCategory {
     pub fn evidence(self) -> Evidence {
         match self {
-            NeedCategory::Pc | NeedCategory::Telephone | NeedCategory::Sim => Evidence::Equipment,
+            NeedCategory::Pc
+            | NeedCategory::Ecran
+            | NeedCategory::Tablette
+            | NeedCategory::Imprimante
+            | NeedCategory::Accessoire
+            | NeedCategory::Telephone
+            | NeedCategory::Sim => Evidence::Equipment,
             NeedCategory::EmailPro | NeedCategory::Xena | NeedCategory::Intelix => Evidence::Account,
+            NeedCategory::Vehicule => Evidence::Vehicle,
             _ => Evidence::None,
         }
     }
@@ -110,6 +136,10 @@ impl NeedCategory {
     pub fn matches_item(self, item_type: &str, asset_kind: Option<&str>) -> bool {
         match self {
             NeedCategory::Pc => item_type == "asset" && matches!(asset_kind, Some("pc_portable") | Some("pc_fixe")),
+            NeedCategory::Ecran => item_type == "asset" && asset_kind == Some("ecran"),
+            NeedCategory::Tablette => item_type == "asset" && asset_kind == Some("tablette"),
+            NeedCategory::Imprimante => item_type == "asset" && asset_kind == Some("imprimante"),
+            NeedCategory::Accessoire => item_type == "accessoire",
             NeedCategory::Telephone => item_type == "asset" && asset_kind == Some("telephone"),
             NeedCategory::Sim => item_type == "sim",
             _ => false,
@@ -260,6 +290,16 @@ mod tests {
         assert!(NeedCategory::Telephone.matches_item("asset", Some("telephone")));
         assert!(NeedCategory::Sim.matches_item("sim", None));
         assert!(!NeedCategory::Sim.matches_item("accessoire", None));
+    }
+
+    #[test]
+    fn equipements_distincts() {
+        assert!(NeedCategory::Ecran.matches_item("asset", Some("ecran")));
+        assert!(!NeedCategory::Ecran.matches_item("asset", Some("pc_portable")));
+        assert!(!NeedCategory::Pc.matches_item("asset", Some("ecran")));
+        assert!(NeedCategory::Accessoire.matches_item("accessoire", None));
+        assert!(!NeedCategory::Telephone.matches_item("sim", None), "une SIM n'est pas un téléphone");
+        assert_eq!(NeedCategory::Imprimante.responsible_role(), Role::It);
     }
 
     #[test]
