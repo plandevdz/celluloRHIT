@@ -46,7 +46,8 @@ pub async fn holdings_json(conn: &mut PgConnection, employee_id: Uuid) -> AppRes
                     'asset_kind', (SELECT kind FROM assets WHERE id = a.asset_id),
                     'label', ml.label, 'identifier', ml.identifier, 'quantity', a.quantity,
                     'open_quantity', a.open_quantity, 'since', a.started_at,
-                    'origin_reference', m.reference, 'case_reference', c.reference)
+                    'origin_reference', m.reference, 'case_reference', c.reference,
+                    'reprise_note', CASE WHEN m.kind = 'reprise' THEN m.note END)
                     ORDER BY a.started_at, ml.line_no), '[]')
            FROM assignments a
            JOIN movement_lines ml ON ml.id = a.handover_line_id

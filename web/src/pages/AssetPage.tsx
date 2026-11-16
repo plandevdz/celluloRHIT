@@ -143,6 +143,7 @@ export default function AssetPage() {
                     <td className="nowrap">{fmtDateTime(h.effective_at)}</td>
                     <td>
                       {movementKind[h.kind] ?? h.kind} {h.reference}
+                      {h.note && <div className="small muted">{h.note}</div>}
                     </td>
                     <td>
                       <Link to={`/personnel/${h.employee_id}`}>{h.employee}</Link>

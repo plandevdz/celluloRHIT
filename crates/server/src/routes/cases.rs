@@ -284,8 +284,8 @@ pub async fn add_training(
         }
     }
     let session_id: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO training_sessions (case_id, employee_id, catalog_id, trainer_id)
-         VALUES ($1, $2, $3, $4)
+        "INSERT INTO training_sessions (case_id, employee_id, catalog_id, trainer_id, trainer_name)
+         VALUES ($1, $2, $3, $4, CASE WHEN $4::uuid IS NULL THEN (SELECT default_trainer_name FROM training_catalog WHERE id = $3) END)
          ON CONFLICT (case_id, catalog_id) WHERE case_id IS NOT NULL DO NOTHING
          RETURNING id",
     )
@@ -739,9 +739,11 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
     let trainings: Value = if hr || user.has(Role::Formation) {
         sqlx::query_scalar(
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
-                    'id', s.id, 'catalog_id', s.catalog_id, 'name', tc.name, 'status', s.status, 'trainer', u.display_name,
+                    'id', s.id, 'catalog_id', s.catalog_id, 'name', tc.name, 'status', s.status,
+                    'trainer', coalesce(s.trainer_name, u.display_name), 'recorded_by', rb.display_name,
                     'planned_date', s.planned_date, 'done_date', s.done_date, 'reason', s.reason) ORDER BY tc.name), '[]')
            FROM training_sessions s JOIN training_catalog tc ON tc.id = s.catalog_id LEFT JOIN users u ON u.id = s.trainer_id
+           LEFT JOIN users rb ON rb.id = s.recorded_by
           WHERE s.case_id = $1",
         )
         .bind(c.id)

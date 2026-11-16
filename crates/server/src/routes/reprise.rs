@@ -513,6 +513,8 @@ struct CatalogData {
     description: Option<String>,
     support_url: Option<String>,
     default_trainer_id: Option<Uuid>,
+    #[serde(default)]
+    default_trainer_name: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -622,6 +624,12 @@ struct SessionData {
     done_date: Option<NaiveDate>,
     evaluation: Option<String>,
     trainer_id: Option<Uuid>,
+    /// Animateur sans compte : nom conservé (FormateurNom), aucun compte créé.
+    #[serde(default)]
+    trainer_name: Option<String>,
+    /// Ancienne référence et dossier SharePoint, en texte.
+    #[serde(default)]
+    note: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -800,12 +808,16 @@ async fn plan_catalog(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Opti
         description: row.text(&["Description"]),
         support_url: url_part(row.text(&["Support"])),
         default_trainer_id: None,
+        default_trainer_name: None,
     };
-    if let Some(email) = row.text(&["FormateurEmail"]) {
-        match ctx.users.get(&email.to_lowercase()) {
-            Some((id, true)) => d.default_trainer_id = Some(*id),
-            Some((_, false)) => plan.warn(format!("Formateur {email} : compte sans rôle FORMATION actif, intervenant non repris")),
-            None => plan.warn(format!("Formateur {email} : aucun compte applicatif (reprenez UtilisateursApp)")),
+    let trainer_label = row.text(&["FormateurNom", "Formateur"]);
+    match row.text(&["FormateurEmail"]).map(|e| (ctx.users.get(&e.to_lowercase()).copied(), e)) {
+        Some((Some((id, true)), _)) => d.default_trainer_id = Some(id),
+        other => {
+            d.default_trainer_name = trainer_label.or_else(|| other.map(|(_, e)| e));
+            if let Some(n) = &d.default_trainer_name {
+                plan.info(format!("Intervenant par défaut « {n} » : nom conservé, sans compte applicatif"));
+            }
         }
     }
     let existing = match known {
@@ -845,7 +857,7 @@ async fn plan_user(conn: &mut PgConnection, row: &Row, plan: &mut Plan) -> AppRe
     roles.sort();
     roles.dedup();
     if roles.is_empty() {
-        plan.err("aucun rôle applicatif (RH, IT, Graphiste, Formateur ou Admin) : compte non repris");
+        plan.err("compte non créé : aucun rôle applicatif (RH, IT, Graphiste, Formateur ou Admin). Règle : Manager, Moyens généraux et Responsable n'ouvrent aucun droit ; un manager se désigne sur la fiche du salarié, sans compte");
         return Ok(());
     }
     let active = opt_bool(row, &["Actif"], plan, "Actif").unwrap_or(true);
@@ -958,11 +970,17 @@ async fn plan_person(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Optio
         plan.info("« En départ » repris : la personne reste présente ; le dossier de départ s'ouvre dans l'application");
     }
     // Décisions sur les anciens champs (voir docs/correspondance-sharepoint.md).
+    // Anciennes cases conservées en texte (remarque de reprise, RH/ADMIN) :
+    // elles ne prouvent ni impression, ni remise, ni création d'adresse ;
+    // aucune tâche ni preuve n'en est déduite.
+    let mut legacy_notes: Vec<String> = Vec::new();
     if let Some(c) = row.text(&["CarteVisite"]) {
-        plan.info(format!("CarteVisite « {c} » non reprise : demandée, produite ou détenue ? Une carte se demande par une demande ponctuelle"));
+        plan.info(format!("CarteVisite « {c} » conservée en texte seulement : ni tâche, ni preuve d'impression ou de remise"));
+        legacy_notes.push(format!("Ancienne case « Carte de visite » : {c} (n'atteste ni impression ni remise)"));
     }
     if let Some(b) = row.text(&["BesoinEmailPro"]) {
-        plan.info(format!("BesoinEmailPro « {b} » non repris comme besoin : seule l'adresse réellement créée (EmailPro) est reprise"));
+        plan.info(format!("BesoinEmailPro « {b} » conservé en texte seulement : seule l'adresse réellement créée (EmailPro) devient un compte"));
+        legacy_notes.push(format!("Ancien « Besoin email pro » : {b}"));
     }
     let mut d = PersonData {
         first_name,
@@ -980,7 +998,11 @@ async fn plan_person(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Optio
         contract_type: choice(row.text(&["TypeContrat", "Type de contrat"]), legacy::contract_type, plan, "TypeContrat"),
         poste_fixe: row.text(&["PosteFixe", "Poste fixe"]),
         leaving,
-        import_note: row.text(&["RemarqueImport", "Remarque import"]),
+        import_note: {
+            let mut parts: Vec<String> = row.text(&["RemarqueImport", "Remarque import"]).into_iter().collect();
+            parts.extend(legacy_notes);
+            (!parts.is_empty()).then(|| parts.join(" · "))
+        },
         manager_email: row.text(&["ManagerEmail"]).map(|e| e.to_lowercase()),
         primary_line: row.text(&["LignePrincipale", "Ligne principale"]).map(|n| n.chars().filter(|c| !c.is_whitespace()).collect()),
         ..Default::default()
@@ -1233,6 +1255,20 @@ async fn plan_line(conn: &mut PgConnection, row: &Row, known: Option<Uuid>, plan
     Ok(())
 }
 
+/// Ancienne référence de la ligne et dossier SharePoint d'origine, gardés en
+/// texte : les anciens dossiers ne sont pas recréés (hypothèse en attente
+/// d'accord), mais le lien n'est pas perdu.
+fn legacy_refs(row: &Row) -> Option<String> {
+    let parts: Vec<String> = [
+        row.text(&["Title", "Titre"]).map(|t| format!("réf. SharePoint {t}")),
+        row.text(&["Dossier"]).map(|t| format!("dossier SharePoint {t}")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+    (!parts.is_empty()).then(|| parts.join(", "))
+}
+
 async fn plan_assignment(conn: &mut PgConnection, row: &Row, known: Option<Uuid>, plan: &mut Plan) -> AppResult<()> {
     if known.is_some() {
         plan.proposal = "inchange";
@@ -1298,6 +1334,7 @@ async fn plan_assignment(conn: &mut PgConnection, row: &Row, known: Option<Uuid>
         row.text(&["Observations"]),
         who(&["AttribueParNom"], &["AttribueParEmail"]).map(|w| format!("attribué par {w}")),
         who(&["RecuParNom"], &["RecuParEmail"]).map(|w| format!("restitution reçue par {w}")),
+        legacy_refs(row),
     ]
     .into_iter()
     .flatten()
@@ -1315,18 +1352,27 @@ async fn plan_assignment(conn: &mut PgConnection, row: &Row, known: Option<Uuid>
     }
     if d.ended_at.is_none() {
         // Affectation encore active : contrôle des gardes contradictoires.
-        let holder: Option<(Uuid, String)> = sqlx::query_as(
-            "SELECT a.employee_id, e.first_name || ' ' || e.last_name FROM assignments a JOIN employees e ON e.id = a.employee_id
+        let holder: Option<(Uuid, String, Uuid, String)> = sqlx::query_as(
+            "SELECT a.employee_id, e.first_name || ' ' || e.last_name, a.id, m.kind
+               FROM assignments a JOIN employees e ON e.id = a.employee_id
+               JOIN movement_lines l ON l.id = a.handover_line_id JOIN movements m ON m.id = l.movement_id
               WHERE a.ended_at IS NULL AND (a.asset_id = $1 OR a.sim_id = $2)",
         )
         .bind(d.asset_id)
         .bind(d.sim_id)
         .fetch_optional(&mut *conn)
         .await?;
-        if let Some((emp, who)) = holder {
-            if Some(emp) == d.employee_id {
+        if let Some((emp, who, assignment, kind)) = holder {
+            if Some(emp) == d.employee_id && kind == "reprise" {
+                // Garde déjà reprise depuis « AttribueA » (MaterielIT, LignesMobiles) :
+                // l'affectation la complète (date réelle, observation, intervenants,
+                // ancienne référence) sans créer de seconde affectation.
+                plan.proposal = "mise_a_jour";
+                plan.target_id = Some(assignment);
+                plan.info("Garde déjà reprise pour ce salarié : complétée avec la date d'attribution et l'observation de l'affectation");
+            } else if Some(emp) == d.employee_id {
                 plan.proposal = "inchange";
-                plan.info("Déjà détenu par ce salarié dans l'application");
+                plan.info("Déjà détenu par ce salarié dans l'application (remise avec décharge) : rien n'est modifié");
             } else if d.employee_id.is_some() {
                 plan.err(format!("Affectation active contradictoire : déjà détenu par {who}"));
             }
@@ -1373,14 +1419,21 @@ async fn plan_session(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Opti
         status,
         evaluation: choice(row.text(&["Evaluation", "Évaluation"]), legacy::training_evaluation, plan, "Évaluation"),
         trainer_id: None,
+        trainer_name: None,
+        note: legacy_refs(row),
     };
     if d.status == "realisee" && d.done_date.is_none() {
         plan.warn("Session réalisée sans date : date de réalisation inconnue");
     }
-    if let Some(email) = row.text(&["FormateurEmail"]) {
-        match ctx.users.get(&email.to_lowercase()) {
-            Some((id, true)) => d.trainer_id = Some(*id),
-            _ => plan.info(format!("Formateur {email} : pas de compte FORMATION actif, intervenant non relié")),
+    let trainer_label = row.text(&["FormateurNom", "Formateur"]);
+    match row.text(&["FormateurEmail"]).and_then(|e| ctx.users.get(&e.to_lowercase()).copied()) {
+        Some((id, true)) => d.trainer_id = Some(id),
+        _ => {
+            // Sans compte FORMATION : le nom de l'animateur est conservé tel quel.
+            d.trainer_name = trainer_label.clone().or_else(|| row.text(&["FormateurEmail"]));
+            if let Some(n) = &d.trainer_name {
+                plan.info(format!("Animée par « {n} » : nom conservé, sans compte applicatif"));
+            }
         }
     }
     let (title, who) = resolve_employee(conn, row, "Employe").await?;
@@ -1489,6 +1542,7 @@ async fn plan_vehicle_assignment(conn: &mut PgConnection, row: &Row, known: Opti
                 row.text(&["ObservationsRetour", "Observations au retour"]),
                 who("RemisParNom", "RemisParEmail").map(|w| format!("remis par {w}")),
                 who("RecuParNom", "RecuParEmail").map(|w| format!("reçu par {w}")),
+                legacy_refs(row),
             ]
             .into_iter()
             .flatten()
@@ -1886,7 +1940,7 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     for (emp, number) in &primary_lines {
         sqlx::query(
             "UPDATE employees SET primary_line_id = l.id FROM mobile_lines l
-              WHERE employees.id = $1 AND l.number = $2
+              WHERE employees.id = $1 AND replace(l.number, ' ', '') = $2
                 AND EXISTS (SELECT 1 FROM sim_cards s JOIN assignments a ON a.sim_id = s.id AND a.ended_at IS NULL
                              WHERE s.line_id = l.id AND a.employee_id = $1)",
         )
@@ -1895,6 +1949,22 @@ async fn commit(State(state): State<AppState>, user: CurrentUser, Path(id): Path
         .execute(&mut *tx)
         .await?;
     }
+    // L'ordre de reprise place Personnel avant LignesMobiles : la ligne
+    // principale d'une fiche déjà reprise est rattrapée dès que le salarié
+    // détient la SIM (jamais écrasée si elle a déjà été choisie).
+    sqlx::query(
+        "UPDATE employees e SET primary_line_id = l.id
+           FROM migration_rows r
+           JOIN migration_batches b ON b.id = r.batch_id AND b.source_list = 'Personnel' AND b.status = 'applique',
+                mobile_lines l
+          WHERE r.result_id = e.id AND e.primary_line_id IS NULL
+            AND r.resolved->>'primary_line' IS NOT NULL
+            AND replace(l.number, ' ', '') = r.resolved->>'primary_line'
+            AND EXISTS (SELECT 1 FROM sim_cards s JOIN assignments a ON a.sim_id = s.id AND a.ended_at IS NULL
+                         WHERE s.line_id = l.id AND a.employee_id = e.id)",
+    )
+    .execute(&mut *tx)
+    .await?;
     let summary = json!({ "resultats": counts, "managers_relies": linked });
     sqlx::query(
         "UPDATE migration_batches SET status = 'applique', committed_at = now(), committed_by = $2,
@@ -1985,7 +2055,8 @@ async fn apply_row(
                     sqlx::query(
                         "UPDATE training_catalog SET name = $2, category = coalesce($3, category), duration_hours = coalesce($4, duration_hours),
                                 description = coalesce($5, description), support_url = coalesce($6, support_url),
-                                default_trainer_id = coalesce($7, default_trainer_id)
+                                default_trainer_id = coalesce($7, default_trainer_id),
+                                default_trainer_name = coalesce($8, default_trainer_name)
                           WHERE id = $1",
                     )
                     .bind(id)
@@ -1995,14 +2066,15 @@ async fn apply_row(
                     .bind(&d.description)
                     .bind(&d.support_url)
                     .bind(d.default_trainer_id)
+                    .bind(&d.default_trainer_name)
                     .execute(&mut *conn)
                     .await?;
                     id
                 }
                 None => {
                     sqlx::query_scalar(
-                        "INSERT INTO training_catalog (name, category, duration_hours, description, support_url, default_trainer_id)
-                         VALUES ($1, $2, $3, $4, $5, $6) RETURNING id",
+                        "INSERT INTO training_catalog (name, category, duration_hours, description, support_url, default_trainer_id, default_trainer_name)
+                         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id",
                     )
                     .bind(&d.name)
                     .bind(&d.category)
@@ -2010,6 +2082,7 @@ async fn apply_row(
                     .bind(&d.description)
                     .bind(&d.support_url)
                     .bind(d.default_trainer_id)
+                    .bind(&d.default_trainer_name)
                     .fetch_one(&mut *conn)
                     .await?
                 }
@@ -2133,9 +2206,15 @@ async fn apply_row(
                 (_, Some(s)) => Item::Sim(s),
                 _ => return Err(AppError::invalid("objet", "objet introuvable")),
             };
-            let id = reprise_assignment(conn, user, employee, item, &d.label, d.started_at, d.ended_at, d.condition.as_deref(), d.note.as_deref()).await?;
-            remember(conn, list, r, id, None, batch).await?;
-            ("cree", id)
+            if let (true, Some(assignment)) = (update, target) {
+                complete_reprise_assignment(conn, assignment, employee, d.started_at, d.note.as_deref()).await?;
+                remember(conn, list, r, assignment, None, batch).await?;
+                ("mis_a_jour", assignment)
+            } else {
+                let id = reprise_assignment(conn, user, employee, item, &d.label, d.started_at, d.ended_at, d.condition.as_deref(), d.note.as_deref()).await?;
+                remember(conn, list, r, id, None, batch).await?;
+                ("cree", id)
+            }
         }
         List::Formations => {
             let mut d: SessionData = data(&r.resolved)?;
@@ -2144,8 +2223,11 @@ async fn apply_row(
             }
             let employee = d.employee_id.ok_or_else(|| AppError::invalid("employe", "salarié à choisir"))?;
             let id: Uuid = sqlx::query_scalar(
-                "INSERT INTO training_sessions (employee_id, catalog_id, trainer_id, status, planned_date, done_date, evaluation, reason)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'Reprise SharePoint') RETURNING id",
+                "INSERT INTO training_sessions (employee_id, catalog_id, trainer_id, status, planned_date, done_date, evaluation, reason,
+                                                trainer_name, recorded_by, recorded_at, result)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, 'Reprise SharePoint', $8,
+                         CASE WHEN $4 IN ('realisee', 'dispensee') THEN $9::uuid END,
+                         CASE WHEN $4 IN ('realisee', 'dispensee') THEN now() END, $10) RETURNING id",
             )
             .bind(employee)
             .bind(d.catalog_id)
@@ -2154,6 +2236,9 @@ async fn apply_row(
             .bind(d.planned_date)
             .bind(d.done_date)
             .bind(&d.evaluation)
+            .bind(&d.trainer_name)
+            .bind(user.id)
+            .bind(&d.note)
             .fetch_one(&mut *conn)
             .await?;
             remember(conn, list, r, id, None, batch).await?;
@@ -2343,6 +2428,42 @@ enum Item {
 /// fabriquée), une ligne et l'affectation correspondante. Une affectation
 /// déjà terminée est reprise dans l'historique sans changer l'état du bien.
 #[allow(clippy::too_many_arguments)]
+/// Complète une garde issue d'une reprise (jamais une remise avec décharge) :
+/// date d'attribution réelle et observation de l'ancienne affectation.
+async fn complete_reprise_assignment(
+    conn: &mut PgConnection,
+    assignment: Uuid,
+    employee_id: Uuid,
+    started_at: Option<DateTime<Utc>>,
+    note: Option<&str>,
+) -> AppResult<()> {
+    let movement: Option<Uuid> = sqlx::query_scalar(
+        "SELECT m.id FROM assignments a JOIN movement_lines l ON l.id = a.handover_line_id JOIN movements m ON m.id = l.movement_id
+          WHERE a.id = $1 AND a.employee_id = $2 AND a.ended_at IS NULL AND m.kind = 'reprise' FOR UPDATE OF a, m",
+    )
+    .bind(assignment)
+    .bind(employee_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let movement = movement.ok_or_else(|| AppError::conflict("la garde a changé depuis l'aperçu : relancez l'analyse"))?;
+    sqlx::query("UPDATE assignments SET started_at = coalesce($2, started_at) WHERE id = $1")
+        .bind(assignment)
+        .bind(started_at)
+        .execute(&mut *conn)
+        .await?;
+    sqlx::query(
+        "UPDATE movements SET effective_at = coalesce($2, effective_at),
+                note = CASE WHEN $3::text IS NULL THEN note ELSE coalesce(note, 'Reprise SharePoint') || ' — ' || $3 END
+          WHERE id = $1",
+    )
+    .bind(movement)
+    .bind(started_at)
+    .bind(note)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 async fn reprise_assignment(
     conn: &mut PgConnection,
     user: &CurrentUser,

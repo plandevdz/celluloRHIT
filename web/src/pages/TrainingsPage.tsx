@@ -84,6 +84,7 @@ export default function TrainingsPage() {
                         <Badge status={s.status} label={sessionStatusLabel[s.status]} />
                         {s.planned_date && <div className="small">prévue le {fmtDate(s.planned_date)}</div>}
                         {s.done_date && <div className="small">réalisée le {fmtDate(s.done_date)}</div>}
+                        {s.recorded_by && <div className="small muted">enregistrée par {s.recorded_by}</div>}
                         {s.reason && <div className="small">Motif : {s.reason}</div>}
                       </td>
                       <td>
@@ -132,7 +133,10 @@ function SessionDialog({ session, action, onClose, onDone }: { session: any; act
   const [reason, setReason] = useState("");
   const [result, setResult] = useState("");
   const [evaluation, setEvaluation] = useState("");
-  const [trainer, setTrainer] = useState(session.trainer_id ?? "");
+  // « Animée par » : moi-même, un compte FORMATION, ou une personne sans compte
+  // (nom conservé, aucun compte créé). L'auteur de l'enregistrement est tracé à part.
+  const [trainer, setTrainer] = useState(session.trainer_name ? "__nom" : session.trainer_id ?? "");
+  const [trainerName, setTrainerName] = useState(session.trainer_name ?? "");
   const [error, setError] = useState<ApiError | null>(null);
   const needsDate = action === "planifier" || action === "realiser" || action === "reporter";
   const needsReason = action === "reporter" || action === "dispenser" || action === "annuler";
@@ -140,7 +144,15 @@ function SessionDialog({ session, action, onClose, onDone }: { session: any; act
     e.preventDefault();
     try {
       await api(`/trainings/sessions/${session.id}`, {
-        body: { action, date: date || null, reason: reason || null, result: result || null, evaluation: evaluation || null, trainer_id: trainer || null },
+        body: {
+          action,
+          date: date || null,
+          reason: reason || null,
+          result: result || null,
+          evaluation: evaluation || null,
+          trainer_id: trainer && trainer !== "__nom" ? trainer : null,
+          trainer_name: trainer === "__nom" ? trainerName.trim() || null : null,
+        },
       });
       onDone();
     } catch (err) {
@@ -156,7 +168,7 @@ function SessionDialog({ session, action, onClose, onDone }: { session: any; act
           </Field>
         )}
         {action !== "annuler" && (
-          <Field label="Intervenant">
+          <Field label={action === "realiser" ? "Animée par" : "Intervenant"} hint="Vous restez l'auteur de l'enregistrement, quel que soit l'intervenant.">
             <select value={trainer} onChange={(e) => setTrainer(e.target.value)}>
               <option value="">Moi-même</option>
               {trainers.data?.map((u) => (
@@ -164,7 +176,13 @@ function SessionDialog({ session, action, onClose, onDone }: { session: any; act
                   {u.display_name}
                 </option>
               ))}
+              <option value="__nom">Une personne sans compte…</option>
             </select>
+          </Field>
+        )}
+        {action !== "annuler" && trainer === "__nom" && (
+          <Field label="Nom de l'intervenant" hint="Conservé tel quel ; aucun compte n'est créé." required>
+            <input value={trainerName} onChange={(e) => setTrainerName(e.target.value)} required dir="auto" />
           </Field>
         )}
         {needsReason && (
@@ -214,7 +232,7 @@ function CatalogSection({ canEdit }: { canEdit: boolean }) {
               <td>
                 <strong>{t.name}</strong> {!t.active && <span className="tag">Inactive</span>}
                 <div className="small muted">
-                  {[t.category && categoryLabel[t.category], t.duration_hours && `${t.duration_hours} h`, t.default_trainer].filter(Boolean).join(" · ")}
+                  {[t.category && categoryLabel[t.category], t.duration_hours && `${t.duration_hours} h`, t.default_trainer ?? t.default_trainer_name].filter(Boolean).join(" · ")}
                 </div>
                 {t.support_url && (
                   <a className="small" href={t.support_url} target="_blank" rel="noopener noreferrer">
@@ -247,6 +265,7 @@ function CatalogDialog({ item, onClose, onDone }: { item: any | null; onClose: (
     description: item?.description ?? "",
     support_url: item?.support_url ?? "",
     default_trainer_id: item?.default_trainer_id ?? "",
+    default_trainer_name: item?.default_trainer_name ?? "",
     active: item?.active ?? true,
   });
   const cmd = useCommand();
@@ -262,6 +281,7 @@ function CatalogDialog({ item, onClose, onDone }: { item: any | null; onClose: (
             description: f.description || null,
             support_url: f.support_url || null,
             default_trainer_id: f.default_trainer_id || null,
+            default_trainer_name: !f.default_trainer_id && f.default_trainer_name.trim() ? f.default_trainer_name.trim() : null,
             active: f.active,
           };
           const r = await cmd.run(() => api(item ? `/trainings/catalog/${item.id}` : "/trainings/catalog", { method: item ? "PATCH" : "POST", body }));
@@ -295,6 +315,11 @@ function CatalogDialog({ item, onClose, onDone }: { item: any | null; onClose: (
               ))}
             </select>
           </Field>
+          {!f.default_trainer_id && (
+            <Field label="Ou intervenant sans compte" hint="Nom conservé, aucun compte créé.">
+              <input value={f.default_trainer_name} onChange={(e) => setF({ ...f, default_trainer_name: e.target.value })} dir="auto" />
+            </Field>
+          )}
         </div>
         <Field label="Lien du support">
           <input type="url" value={f.support_url} onChange={(e) => setF({ ...f, support_url: e.target.value })} />

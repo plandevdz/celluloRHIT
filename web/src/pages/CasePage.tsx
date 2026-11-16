@@ -231,6 +231,7 @@ export default function CasePage() {
                         {t.trainer ?? "File Formation"}
                         {t.planned_date && <div>Prévue le {fmtDate(t.planned_date)}</div>}
                         {t.done_date && <div>Réalisée le {fmtDate(t.done_date)}</div>}
+                        {t.recorded_by && <div className="muted">enregistrée par {t.recorded_by}</div>}
                         {t.reason && <div>Motif : {t.reason}</div>}
                       </td>
                     </tr>

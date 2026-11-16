@@ -91,11 +91,18 @@ ALTER TABLE training_catalog
     ADD COLUMN duration_hours      numeric(6, 2) CHECK (duration_hours IS NULL OR duration_hours > 0),
     ADD COLUMN description         text,
     ADD COLUMN support_url         text,
-    ADD COLUMN default_trainer_id  uuid REFERENCES users(id);
+    ADD COLUMN default_trainer_id  uuid REFERENCES users(id),
+    -- Intervenant par défaut sans compte applicatif (nom conservé tel quel).
+    ADD COLUMN default_trainer_name text;
 
 -- Évaluation d'une session réalisée (le commentaire libre `result` reste).
+-- Qui a animé (compte FORMATION ou simple nom) est distinct de qui a
+-- enregistré la session dans l'application (recorded_by, recorded_at).
 ALTER TABLE training_sessions
-    ADD COLUMN evaluation text CHECK (evaluation IS NULL OR evaluation IN ('acquis', 'a_revoir'));
+    ADD COLUMN evaluation   text CHECK (evaluation IS NULL OR evaluation IN ('acquis', 'a_revoir')),
+    ADD COLUMN trainer_name text,
+    ADD COLUMN recorded_by  uuid REFERENCES users(id),
+    ADD COLUMN recorded_at  timestamptz;
 
 -- ------------------------------------------------------------ parc IT détaillé
 ALTER TABLE assets DROP CONSTRAINT assets_kind_check;

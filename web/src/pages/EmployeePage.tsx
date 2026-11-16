@@ -265,6 +265,7 @@ export default function EmployeePage() {
                       </td>
                       <td className="small">
                         {h.origin_reference} · {fmtDateTime(h.since)}
+                        {h.reprise_note && <div className="muted">{h.reprise_note} — sans décharge dans l'application</div>}
                         {h.case_reference && (
                           <>
                             {" "}
@@ -317,6 +318,13 @@ export default function EmployeePage() {
                   <li key={t.id}>
                     {t.name} · <Badge status={t.status} label={sessionStatusLabel[t.status]} />
                     {t.done_date && ` le ${fmtDate(t.done_date)}`}
+                    {(t.trainer || t.recorded_by || t.reprise) && (
+                      <div className="small muted">
+                        {[t.trainer && `animée par ${t.trainer}`, t.recorded_by && `enregistrée par ${t.recorded_by}`, t.reprise && "reprise SharePoint"]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </div>
+                    )}
                   </li>
                 ))}
               </ul>

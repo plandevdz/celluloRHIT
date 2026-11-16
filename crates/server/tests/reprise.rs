@@ -143,7 +143,7 @@ async fn reprise_complete_des_listes(pool: PgPool) {
 101;Matériel;PC-002;;Amine Benali;01/01/2023;01/06/2023\n\
 102;Matériel;PC-001;;Karim Zerrouki;01/01/2024;\n";
     let (id, p) = preview(&app, &admin, "Affectations", affectations).await;
-    assert_eq!(row(&p, 2)["proposal"], "inchange");
+    assert_eq!(row(&p, 2)["proposal"], "mise_a_jour", "garde reprise complétée, jamais doublée");
     assert_eq!(row(&p, 3)["proposal"], "creation");
     assert_eq!(row(&p, 4)["proposal"], "rejet", "affectation active contradictoire");
     commit(&app, &admin, &id).await;

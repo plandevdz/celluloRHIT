@@ -8,7 +8,6 @@ import {
   DEPARTMENTS,
   fmtDateTime,
   needLabel,
-  preferenceLabel,
   repriseProposalLabel,
   repriseResultLabel,
 } from "../labels";
@@ -42,7 +41,7 @@ export function ProfilesTab() {
                 </td>
                 <td className="small">
                   {p.needs
-                    .map((n: any) => (n.quantity > 1 ? `${n.quantity} × ` : "") + needLabel[n.category] + (n.preference ? ` (${preferenceLabel[n.preference]?.toLowerCase()})` : ""))
+                    .map((n: any) => (n.quantity > 1 ? `${n.quantity} × ` : "") + needLabel[n.category] + (n.preference ? ` (${({ fixe: "fixe", portable: "portable", sans_preference: "sans préférence" } as Record<string, string>)[n.preference] ?? n.preference})` : ""))
                     .join(", ") || "—"}
                   {p.trainings.length > 0 && <div className="muted">Formations : {p.trainings.map((t: any) => t.name).join(", ")}</div>}
                 </td>
@@ -420,7 +419,9 @@ export function RepriseTab() {
           )}
           <p className="small muted">
             Avant le Personnel : créez les sites en Administration. Dates attendues au format jj/mm/aaaa (ou ISO). Les dossiers, tâches et modèles
-            de tâches ne sont pas repris : les parcours en cours se recréent dans l'application.
+            de tâches ne sont pas repris dans cette version (décision en attente) : ils restent consultables dans SharePoint ; la
+            référence et le dossier d'origine de chaque affectation ou formation reprise sont conservés en texte. Les anciennes décharges
+            signées restent dans la bibliothèque SharePoint.
           </p>
           <ErrorBox error={error} />
           <button className="btn btn-primary" disabled={busy || !file || !list}>

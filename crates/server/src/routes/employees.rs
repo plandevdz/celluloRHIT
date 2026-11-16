@@ -400,8 +400,12 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
     let trainings: Value = if hr || user.has(Role::Formation) {
         sqlx::query_scalar(
             "SELECT coalesce(jsonb_agg(jsonb_build_object('id', t.id, 'name', tc.name, 'status', t.status,
-                                       'planned_date', t.planned_date, 'done_date', t.done_date) ORDER BY tc.name), '[]')
-               FROM training_sessions t JOIN training_catalog tc ON tc.id = t.catalog_id WHERE t.employee_id = $1",
+                                       'planned_date', t.planned_date, 'done_date', t.done_date,
+                                       'trainer', coalesce(t.trainer_name, u.display_name), 'recorded_by', rb.display_name,
+                                       'reprise', t.reason = 'Reprise SharePoint') ORDER BY tc.name), '[]')
+               FROM training_sessions t JOIN training_catalog tc ON tc.id = t.catalog_id
+               LEFT JOIN users u ON u.id = t.trainer_id LEFT JOIN users rb ON rb.id = t.recorded_by
+              WHERE t.employee_id = $1",
         )
         .bind(id)
         .fetch_one(&mut *conn)
