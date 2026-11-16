@@ -65,14 +65,15 @@ Légende :
 | 1 | Arrivée minimale en cinq champs | **nav** : ONB créé, vu par IT et Formation, aucune tâche. **auto** : `s1_s2_…` |
 | 2 | Fiche terrain : Chéraga, manager, trois wilayas | **nav** : manager relié depuis la fiche ; le filtre de chaque wilaya retrouve la personne ; le site reste Chéraga. **auto** : `s1_s2_…` |
 | 3 | Profil : Xena retiré, une formation gardée, deux écrans ajoutés ; profil modifié ensuite | **nav** : le dossier reflète les choix et reste identique après modification du profil. **auto** : `s3_a_s7_…` |
-| 4 | Formation réalisée avant la remise ; boîte cPanel ; M365 indépendant | **auto** : `s3_a_s7_…` (non rejoué au navigateur) |
+| 4 | Formation réalisée avant la remise ; boîte cPanel ; M365 indépendant | **nav** (16/11) : session « animée par » une intervenante sans compte, « enregistrée par » la Formation, avant toute remise ; cPanel consigné, case M365 décochée. **auto** : `s3_a_s7_…`, `arbitrages` |
 | 5 | Portable à la place du fixe, SIM, un écran sur deux | **nav** : motif exigé ; affichage « Portable remis à la place du fixe », « SIM remise », « 1 écran sur 2 remis » ; tâche écran refusée (« 1/2 remis ») ; PDF relu, limité aux trois articles remis. **auto** : `s3_a_s7_…` |
-| 6 | Présence confirmée avec équipement manquant ; demande de carte après clôture | **auto** : `s3_a_s7_…` (seul le Graphiste est ciblé ; l'ONB reste clos) |
-| 7 | Confidentialité Graphiste ; IT + FORMATION | **auto** : `s3_a_s7_…` (contrat, note RH, commentaire IT et décharges absents du JSON ; accès directs 403) |
-| 8 | Excel aller-retour, homonymes, manager ambigu, ligne incomplète, ancien modèle | **auto** : `s8_s9_…` (aucun dossier, aucune tâche, aucun avis) |
-| 9 | Fiches et dossiers antérieurs | **auto** : `s8_s9_…` (aucun profil, contrat, présence ni remise inventés : affichés « — ») |
+| 6 | Présence confirmée avec équipement manquant ; demande de carte après clôture | **nav** (16/11) : présence confirmée, clôture refusée (écran et signature manquants), puis second écran, scans, clôture ; DEM avisée au seul Graphiste, ONB resté clos. **auto** : `s3_a_s7_…` |
+| 7 | Confidentialité Graphiste ; IT + FORMATION | **nav** (16/11) : contrat, remarque, matricule, biens absents ; ONB, biens, comptes, décharge et scan en accès direct : 403 ; IT + FORMATION voit ses deux parts. **auto** : `s3_a_s7_…` |
+| 8 | Excel aller-retour, homonymes, manager ambigu, ligne incomplète, ancien modèle | **nav** (16/11) : réimport « inchangée » ×7 ; homonymes à arbitrer, manager par le nom non relié, ligne incomplète, wilaya et contrat inconnus rejetés ; ancien modèle à 8 colonnes sans perte. **auto** : `s8_s9_…` |
+| 9 | Fiches et dossiers antérieurs | **nav** (16/11) : données créées avec la version de `main`, puis migrations 0003 à 0008 appliquées sur elles ; dossier et fiches utilisables, rien d'inventé. **auto** : `s8_s9_…` |
+
+Les neuf scénarios ont été joués dans le navigateur. La fiche de recette à suivre soi-même est [docs/recette-pilote.md](docs/recette-pilote.md). Le périmètre du pilote, le cas d'un salarié déjà présent et les écarts sont dans [docs/pilote.md](docs/pilote.md).
 
 Restent à faire sur site :
-- jouer les scénarios 4, 6, 7, 8 et 9 dans le navigateur ;
 - ouvrir le classeur exporté dans Excel et dans LibreOffice ;
 - imprimer la décharge.

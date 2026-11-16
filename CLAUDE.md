@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 « Celluloplast | Parcours salarié » : application **web** (navigateur, aucun installateur) qui remplace Power Apps / Power Automate pour les arrivées, le parc IT, les formations, les mutations et les départs. Serveur Rust + PostgreSQL + interface React, déployés en **Docker** sur un serveur Debian de l'entreprise et joints par leur IP en HTTPS. Tout (code métier, UI, messages d'erreur, commits) est **en français** ; les noms arabes et les accents doivent être préservés partout.
 
-Le cahier des charges fait foi et se lit dans cet ordre : `01-Metier.md` → `03-UI-UX.md` → `04-Donnees.md` → `02-Technique.md` → `05-Recette.md` (scénarios R01–R14). Le `README.md` porte la préparation du serveur et l'ordre des livraisons. `deploy/README.md` est le guide d'installation et la liste de ce qui est livré ou non. `modeles/` contient les gabarits papier des décharges, que reproduit `crates/server/src/pdf.rs`. `docs/correspondance-sharepoint.md` donne la destination des 184 champs de l'ancienne application (à tenir à jour si un champ change de place).
+Le cahier des charges fait foi et se lit dans cet ordre : `01-Metier.md` → `03-UI-UX.md` → `04-Donnees.md` → `02-Technique.md` → `05-Recette.md` (scénarios R01–R14). Le `README.md` porte la préparation du serveur et l'ordre des livraisons. `deploy/README.md` est le guide d'installation et la liste de ce qui est livré ou non. `modeles/` contient les gabarits papier des décharges, que reproduit `crates/server/src/pdf.rs`. `docs/correspondance-sharepoint.md` donne la destination des 184 champs de l'ancienne application (à tenir à jour si un champ change de place) ; `docs/pilote.md` le périmètre du pilote, les écarts et les décisions en attente ; `docs/recette-pilote.md` la fiche de recette.
 
 ## Commandes
 
@@ -21,6 +21,7 @@ cargo test -p server --test parcours r03     # un seul scénario de recette
 cargo test -p server --test lot1             # périmètre, présence, preuves, avis
 cargo test -p server --test lot2_excel       # import/export Excel
 cargo test -p server --test livraison1       # 9 scénarios de la 1re livraison (fiche, profils, équipements, Excel v2)
+cargo test -p server --test arbitrages       # règles provisoires du 16/11 (intervenant sans compte, cases anciennes, salarié déjà présent)
 cargo test -p server --test mutation_depart  # R09, R10 (aussi : vehicules, logiciels, inventaire, graph, reprise)
 cargo run -p server -- serve                 # API + web sur :8080 (migrations au démarrage)
 cargo run -p server -- worker                # avis + PDF en attente (processus séparé)

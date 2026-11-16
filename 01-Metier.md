@@ -71,3 +71,11 @@ La correspondance des 184 champs de l'ancienne application est tenue dans `docs/
   - un écran remis sur deux demandés laisse la tâche ouverte (« 1 écran sur 2 remis ») ;
   - un portable remis à la place d'un fixe exige un motif, affiché « Portable remis à la place du fixe ».
 - **Anciens champs ambigus.** Les décisions sont listées en fin de `docs/correspondance-sharepoint.md`. Trois points restent à arbitrer : « Poste fixe », « Carte de visite » et les profils d'utilisateurs « Manager » et « Moyens généraux ».
+
+## Règles provisoires du 16/11/2026
+
+- **« PC fixe »** dans une nouvelle demande désigne un ordinateur de bureau. L'ancienne colonne « Poste fixe » de la fiche est conservée telle quelle jusqu'à confirmation de son sens.
+- **Ancienne case « Carte de visite »** : elle ne prouve ni impression ni remise. Elle est gardée en texte (remarque de reprise), sans tâche ni preuve.
+- **Anciens profils Manager, Moyens généraux, Responsable** : aucun droit automatique. Un manager se désigne sur la fiche sans obtenir d'accès.
+- **Formation** : la personne qui a animé la session (compte FORMATION ou simple nom, sans compte créé) est distincte de l'utilisateur qui l'enregistre.
+- **Non validé à ce jour** : l'abandon des liens aux anciens dossiers et la réouverture manuelle des dossiers en cours (voir `docs/pilote.md`, décision 1).
