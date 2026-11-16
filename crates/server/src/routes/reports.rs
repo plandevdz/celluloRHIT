@@ -98,7 +98,7 @@ async fn overview(State(state): State<AppState>, user: CurrentUser) -> AppResult
         out["cases"] = q(&state, CASES).await?;
         out["vehicles"] = q(&state, VEHICLES).await?;
         let mut conn = state.pool.acquire().await?;
-        out["vehicle_deadlines"] = crate::routes::vehicles::deadlines_json(&mut conn, crate::documents::algiers_today(), state.config.alert_days, state.config.alert_km).await?;
+        out["vehicle_deadlines"] = crate::routes::vehicles::deadlines_json(&mut conn, crate::documents::algiers_today(), state.cfg().alert_days, state.cfg().alert_km).await?;
     }
     out["access_to_cut"] = q(&state, ACCESS).await?;
     out["returns_missing"] = returns(&state, &s).await?;

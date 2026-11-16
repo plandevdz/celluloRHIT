@@ -156,6 +156,37 @@ pub struct Config {
     pub escalation_minutes: i64,
     /// Modules facultatifs désactivés (pilote).
     pub disabled_modules: Vec<Module>,
+    /// Points d'accès Microsoft (remplaçables pour les tests).
+    pub graph_authority: String,
+    pub graph_endpoint: String,
+    /// Certificat et clé d'envoi / d'archive fournis par le fichier .env
+    /// (`GRAPH_CERT_FILE`…), utilisés si l'interface n'en a pas généré.
+    pub env_mail_cert: Option<(PathBuf, PathBuf)>,
+    pub env_archive_cert: Option<(PathBuf, PathBuf)>,
+    /// Sauvegardes produites par le worker (volume distinct des documents).
+    pub backup_dir: PathBuf,
+    pub pg_dump_bin: String,
+    pub gpg_bin: String,
+    /// Données de Caddy (autorité de certification interne), si montées.
+    pub caddy_data_dir: Option<PathBuf>,
+    /// Mot de passe PostgreSQL transmis à part (pg_dump).
+    pub database_password: Option<String>,
+    /// Sauvegarde chiffrée configurée dans l'interface.
+    pub backup: Option<BackupSettings>,
+    /// Sections réglées dans l'interface (les autres viennent du .env).
+    pub overridden: Vec<String>,
+}
+
+/// Sauvegarde chiffrée à clé publique (la clé privée reste hors du serveur).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BackupSettings {
+    pub public_key: String,
+    pub fingerprint: String,
+    pub uid: String,
+    /// Heure locale (Africa/Algiers) de la sauvegarde quotidienne.
+    pub hour: u32,
+    /// Nombre de sauvegardes réussies conservées sur le serveur.
+    pub keep: u32,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -194,6 +225,17 @@ impl Config {
                 }),
             ),
         };
+        let env_cert = |prefix: &str| -> Option<(PathBuf, PathBuf)> {
+            Some((var(&format!("{prefix}_CERT_FILE"))?.into(), var(&format!("{prefix}_KEY_FILE"))?.into()))
+        };
+        let data_dir: PathBuf = var("DATA_DIR").unwrap_or_else(|| "data".into()).into();
+        let backup_dir: PathBuf = match var("BACKUP_DIR") {
+            Some(d) => d.into(),
+            None => {
+                let name = data_dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "data".into());
+                data_dir.with_file_name(format!("{name}-sauvegardes"))
+            }
+        };
         let (default_font, default_bold) = if cfg!(windows) {
             ("C:/Windows/Fonts/arial.ttf", "C:/Windows/Fonts/arialbd.ttf")
         } else {
@@ -207,7 +249,7 @@ impl Config {
             bind_addr: var("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8080".into()),
             public_url: var("PUBLIC_URL").unwrap_or_else(|| "https://localhost".into()),
             web_dir: var("WEB_DIR").unwrap_or_else(|| "web/dist".into()).into(),
-            data_dir: var("DATA_DIR").unwrap_or_else(|| "data".into()).into(),
+            data_dir,
             cookie_secure: var("COOKIE_SECURE").map(|v| v != "false").unwrap_or(true),
             session_idle_minutes: parse_or("SESSION_IDLE_MINUTES", 60)?,
             session_max_hours: parse_or("SESSION_MAX_HOURS", 10)?,
@@ -228,7 +270,59 @@ impl Config {
             alert_km: parse_or("ALERT_KM", 1000)? as i32,
             escalation_minutes: parse_or("ESCALATION_MINUTES", 60)?,
             disabled_modules: Module::parse_list(&var("MODULES_DESACTIVES").unwrap_or_default())?,
+            graph_authority: var("GRAPH_AUTHORITY").unwrap_or_else(|| "https://login.microsoftonline.com".into()),
+            graph_endpoint: var("GRAPH_ENDPOINT").unwrap_or_else(|| "https://graph.microsoft.com".into()),
+            env_mail_cert: env_cert("GRAPH"),
+            env_archive_cert: env_cert("ARCHIVE"),
+            backup_dir,
+            pg_dump_bin: var("PG_DUMP_BIN").unwrap_or_else(|| "pg_dump".into()),
+            gpg_bin: var("GPG_BIN").unwrap_or_else(|| "gpg".into()),
+            caddy_data_dir: var("CADDY_DATA_DIR").map(PathBuf::from),
+            database_password: var("DATABASE_PASSWORD"),
+            backup: None,
+            overridden: vec![],
         })
+    }
+
+    /// Configuration minimale pour les tests unitaires (aucune variable lue).
+    #[cfg(test)]
+    pub fn from_env_for_tests() -> Self {
+        Config {
+            database_url: String::new(),
+            bind_addr: "127.0.0.1:0".into(),
+            public_url: "https://test.local".into(),
+            web_dir: "web/dist".into(),
+            data_dir: "data".into(),
+            cookie_secure: false,
+            session_idle_minutes: 60,
+            session_max_hours: 10,
+            mail_mode: MailMode::Journal,
+            mail_test_recipient: None,
+            mail_sender: None,
+            mail_graph: None,
+            mail_allowed_domains: vec![],
+            archive_mode: ArchiveMode::Desactive,
+            archive_graph: None,
+            archive_target: None,
+            pdf_font: "font.ttf".into(),
+            pdf_font_bold: "font-bold.ttf".into(),
+            max_upload_bytes: 1024,
+            alert_days: 30,
+            alert_km: 1000,
+            escalation_minutes: 60,
+            disabled_modules: vec![],
+            graph_authority: "https://login.microsoftonline.com".into(),
+            graph_endpoint: "https://graph.microsoft.com".into(),
+            env_mail_cert: None,
+            env_archive_cert: None,
+            backup_dir: "sauvegardes".into(),
+            pg_dump_bin: "pg_dump".into(),
+            gpg_bin: "gpg".into(),
+            caddy_data_dir: None,
+            database_password: None,
+            backup: None,
+            overridden: vec![],
+        }
     }
 
     pub fn module_on(&self, m: Module) -> bool {

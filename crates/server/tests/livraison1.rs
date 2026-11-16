@@ -241,7 +241,7 @@ async fn s3_a_s7_profil_equipements_remise_partielle_et_confidentialite(pool: Pg
         .await
         .unwrap();
     for d in &docs {
-        server::documents::ensure_original(app.pool(), &app.state.config, *d).await.unwrap();
+        server::documents::ensure_original(app.pool(), &app.state.cfg(), *d).await.unwrap();
         let (status, v) = app.upload(&it, &format!("/documents/{d}/scan"), "scan.pdf", b"%PDF-1.4 scan fictif").await;
         assert_eq!(status, StatusCode::OK, "{v}");
     }
@@ -264,7 +264,8 @@ async fn s3_a_s7_profil_equipements_remise_partielle_et_confidentialite(pool: Pg
     let text = g.to_string();
     assert_eq!(g["contact"]["email_pro"], "a.terrain@exemple.test");
     assert_eq!(g["contact"]["mobile"], "0550000501");
-    for forbidden in ["contract_type", "cdd", "wilayas", "import_note", "poste_fixe", "plus de fixe", "PC-501"] {
+    // Valeurs entre guillemets : un identifiant aléatoire peut contenir « cdd ».
+    for forbidden in ["contract_type", "\"cdd\"", "wilayas", "import_note", "poste_fixe", "plus de fixe", "PC-501"] {
         assert!(!text.contains(forbidden), "le Graphiste ne doit pas voir « {forbidden} » : {text}");
     }
     assert_eq!(g["positions"], json!([]));

@@ -89,7 +89,7 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginInput>) -> 
     }
 
     let (token, token_hash) = auth::new_token();
-    let max_hours = state.config.session_max_hours;
+    let max_hours = state.cfg().session_max_hours;
     let mut tx = state.pool.begin().await?;
     sqlx::query("UPDATE users SET failed_logins = 0, locked_until = NULL WHERE id = $1")
         .bind(id)
@@ -108,7 +108,7 @@ async fn login(State(state): State<AppState>, Json(input): Json<LoginInput>) -> 
     audit::record(&mut tx, &user, Audit { action: "connexion", entity: "user", entity_id: Some(id), ..Default::default() }).await?;
     tx.commit().await?;
 
-    let cookie = auth::session_cookie(&token, state.config.cookie_secure, max_hours * 3600);
+    let cookie = auth::session_cookie(&token, state.cfg().cookie_secure, max_hours * 3600);
     let mut resp = Json(Me::from(&user)).into_response();
     resp.headers_mut().insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).map_err(anyhow::Error::from)?);
     Ok(resp)
@@ -132,7 +132,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> AppResult<
     let mut resp = Json(json!({ "ok": true })).into_response();
     resp.headers_mut().insert(
         header::SET_COOKIE,
-        HeaderValue::from_str(&auth::clear_cookie(state.config.cookie_secure)).map_err(anyhow::Error::from)?,
+        HeaderValue::from_str(&auth::clear_cookie(state.cfg().cookie_secure)).map_err(anyhow::Error::from)?,
     );
     Ok(resp)
 }

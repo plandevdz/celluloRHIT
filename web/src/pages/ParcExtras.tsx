@@ -374,7 +374,7 @@ export function LinesSection() {
 }
 
 function LineDialog({ line, onClose, onDone }: { line: any; onClose: () => void; onDone: () => void }) {
-  const [f, setF] = useState({ plan: line.plan ?? "", line_type: line.line_type ?? "", status: line.status, reason: "" });
+  const [f, setF] = useState({ number: line.number ?? "", operator: line.operator ?? "", plan: line.plan ?? "", line_type: line.line_type ?? "", status: line.status, reason: "" });
   const cmd = useCommand();
   return (
     <Modal title={`Ligne ${line.number}`} onClose={onClose}>
@@ -382,12 +382,28 @@ function LineDialog({ line, onClose, onDone }: { line: any; onClose: () => void;
         onSubmit={async (e) => {
           e.preventDefault();
           const r = await cmd.run(() =>
-            api(`/lines/${line.id}`, { method: "PATCH", body: { plan: f.plan || null, line_type: f.line_type || null, status: f.status, reason: f.reason || null } }),
+            api(`/lines/${line.id}`, {
+              method: "PATCH",
+              body: {
+                number: f.number !== line.number ? f.number : null,
+                operator: f.operator !== line.operator ? f.operator : null,
+                plan: f.plan || null,
+                line_type: f.line_type || null,
+                status: f.status,
+                reason: f.reason || null,
+              },
+            }),
           );
           if (r) onDone();
         }}
       >
         <div className="form-grid">
+          <Field label="Numéro">
+            <input value={f.number} onChange={(e) => setF({ ...f, number: e.target.value })} className="mono" />
+          </Field>
+          <Field label="Opérateur">
+            <input value={f.operator} onChange={(e) => setF({ ...f, operator: e.target.value })} />
+          </Field>
           <Field label="Forfait">
             <input value={f.plan} onChange={(e) => setF({ ...f, plan: e.target.value })} />
           </Field>

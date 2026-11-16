@@ -47,6 +47,17 @@ async fn main() -> anyhow::Result<()> {
             MIGRATOR.run(&pool).await?;
             let bind = config.bind_addr.clone();
             let state = AppState::try_new(pool, config)?;
+            state.refresh().await?;
+            // Réglages enregistrés par un autre processus : relus régulièrement.
+            let watcher = state.clone();
+            tokio::spawn(async move {
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(20)).await;
+                    if let Err(e) = watcher.refresh().await {
+                        tracing::warn!(error = ?e, "relecture des réglages en échec");
+                    }
+                }
+            });
             let listener = tokio::net::TcpListener::bind(&bind).await?;
             tracing::info!(%bind, version = server::VERSION, "API démarrée");
             axum::serve(listener, app(state))
@@ -57,7 +68,9 @@ async fn main() -> anyhow::Result<()> {
         }
         Command::Worker => {
             MIGRATOR.run(&pool).await?;
-            worker::run(AppState::try_new(pool, config)?).await?;
+            let state = AppState::try_new(pool, config)?;
+            state.refresh().await?;
+            worker::run(state).await?;
         }
         Command::Migrate => {
             MIGRATOR.run(&pool).await?;

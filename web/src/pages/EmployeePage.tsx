@@ -653,12 +653,16 @@ function EditIdentityDialog({ employee, onClose, onSaved }: { employee: any; onC
   );
 }
 
-/** Données RH organisationnelles : contrat, poste fixe, wilayas, manager,
- *  profil, département (sans changer de poste : une mutation passe par MUT). */
+/** Données RH de la situation en cours : poste, site, département, contrat,
+ *  poste fixe, wilayas, manager, profil. Une mutation (module MUT) reste le
+ *  chemin d'un changement de poste daté et préparé. */
 function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose: () => void; onSaved: () => void }) {
   const wilayas = useLoad(() => api<any[]>("/wilayas"), []);
   const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
+  const sites = useLoad(() => api<any[]>("/sites"), []);
   const [f, setF] = useState({
+    job_title: employee.job_title ?? "",
+    site_id: employee.site_id ?? "",
     leaving: !!employee.leaving,
     planned_exit_date: employee.planned_exit_date ?? "",
     contract_type: employee.contract_type ?? "",
@@ -678,6 +682,8 @@ function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose:
         method: "PATCH",
         body: {
           version: employee.version,
+          job_title: f.job_title !== (employee.job_title ?? "") ? f.job_title : undefined,
+          site_id: f.site_id && f.site_id !== employee.site_id ? f.site_id : undefined,
           contract_type: f.contract_type,
           poste_fixe: f.poste_fixe,
           leaving: f.leaving,
@@ -706,6 +712,21 @@ function EditOrgDialog({ employee, onClose, onSaved }: { employee: any; onClose:
                   {l}
                 </option>
               ))}
+            </select>
+          </Field>
+          <Field label="Poste" hint="Correction directe de la situation en cours (tracée dans l'historique de la fiche).">
+            <input value={f.job_title} onChange={(e) => setF({ ...f, job_title: e.target.value })} required />
+          </Field>
+          <Field label="Site">
+            <select value={f.site_id} onChange={(e) => setF({ ...f, site_id: e.target.value })} required>
+              <option value="">—</option>
+              {sites.data
+                ?.filter((s) => s.active || s.id === employee.site_id)
+                .map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
             </select>
           </Field>
           <Field label="« Poste fixe » (ancien champ, sens à confirmer)">

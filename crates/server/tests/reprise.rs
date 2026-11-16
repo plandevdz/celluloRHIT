@@ -59,11 +59,18 @@ async fn reprise_complete_des_listes(pool: PgPool) {
 1;Amine Benali;Amine;Benali;00042;Actif;01/02/2020;Cheraga;Directeur commercial;Commercial;;CDI;Alger;a.benali@exemple.test;cPanel\n\
 2;Sara Haddad;Sara;Haddad;;Actif;15/03/2022;Cheraga;Commerciale;Commercial;Amine Benali;CDD;16;;\n\
 3;Karim Zerrouki;Karim;Zerrouki;;Sorti;01/01/2019;Cheraga;Technicien;IT;;;;;\n\
-4;Nadia Bouzid;Nadia;Bouzid;;Actif;;Oran;Poste;;;;;;\n";
+4;Nadia Bouzid;Nadia;Bouzid;;Actif;;Oran;Poste;;;;;;\n\
+5;Yacine Saidi;Yacine;Saidi;;Actif;;;Magasinier;;;;;;\n";
     let (id, p) = preview(&app, &admin, "Personnel", personnel).await;
     assert_eq!(row(&p, 2)["proposal"], "creation");
     assert_eq!(row(&p, 3)["proposal"], "a_revoir", "homonyme : jamais rapproché sur le nom");
-    assert_eq!(row(&p, 5)["proposal"], "rejet", "site inconnu");
+    // Listes incomplètes acceptées : site inconnu créé à l'application, site
+    // absent rattaché à « À préciser ».
+    assert_eq!(row(&p, 5)["proposal"], "creation", "site inconnu : créé, pas rejeté");
+    assert!(row(&p, 5)["messages"].to_string().contains("sera créé"));
+    assert_eq!(row(&p, 6)["proposal"], "creation", "site absent : rattaché à « À préciser »");
+    assert!(row(&p, 6)["messages"].to_string().contains("À préciser"));
+    assert_eq!(app.count("SELECT count(*) FROM sites WHERE name IN ('Oran', 'À préciser')").await, 0, "aperçu sans écriture");
     // Aperçu sans écriture métier.
     assert_eq!(app.count("SELECT count(*) FROM employees").await, 1);
 
@@ -76,8 +83,22 @@ async fn reprise_complete_des_listes(pool: PgPool) {
     assert_eq!(row(&done, 2)["result"], "cree");
     assert_eq!(row(&done, 3)["result"], "cree");
     assert_eq!(row(&done, 4)["result"], "cree");
-    assert_eq!(row(&done, 5)["result"], "rejete");
-    assert_eq!(app.count("SELECT count(*) FROM employees").await, 4);
+    assert_eq!(row(&done, 5)["result"], "cree");
+    assert_eq!(row(&done, 6)["result"], "cree");
+    assert_eq!(app.count("SELECT count(*) FROM employees").await, 6);
+    assert_eq!(app.count("SELECT count(*) FROM sites WHERE name IN ('Oran', 'À préciser')").await, 2);
+    assert_eq!(
+        app.count(
+            "SELECT count(*) FROM employee_positions p JOIN sites s ON s.id = p.site_id JOIN employees e ON e.id = p.employee_id
+              WHERE e.last_name = 'Saidi' AND s.name = 'À préciser'"
+        )
+        .await,
+        1
+    );
+    // La fiche incomplète apparaît dans le filtre « À compléter ».
+    let (_, list) = app.call(&admin, Method::GET, "/employees?incomplet=true&q=saidi", None).await;
+    assert_eq!(list["total"], 1, "{list}");
+    assert!(list["items"][0]["missing"].to_string().contains("site"));
     // Zéros initiaux, contrat, wilaya, adresse et manager repris.
     let (mat, contract): (Option<String>, Option<String>) =
         sqlx::query_as("SELECT matricule, contract_type FROM employees WHERE last_name = 'Benali'").fetch_one(app.pool()).await.unwrap();
@@ -108,7 +129,7 @@ async fn reprise_complete_des_listes(pool: PgPool) {
     let replay = v["id"].as_str().unwrap().to_string();
     let (status, _) = app.call(&admin, Method::POST, &format!("/reprise/batches/{replay}/commit"), None).await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert_eq!(app.count("SELECT count(*) FROM employees").await, 4);
+    assert_eq!(app.count("SELECT count(*) FROM employees").await, 6);
 
     // Matériel : garde reprise depuis « AttribueA », matériel partagé en service.
     let materiel = "ID;NumInventaire;Categorie;Marque;Modele;NumSerie;Statut;AttribueA;DateAchat\n\

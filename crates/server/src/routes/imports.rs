@@ -680,7 +680,7 @@ async fn preview(State(state): State<AppState>, user: CurrentUser, mut multipart
         }
     }
     let (file_name, bytes) = file.ok_or_else(|| AppError::invalid("file", "fichier manquant"))?;
-    if bytes.is_empty() || bytes.len() > state.config.max_upload_bytes {
+    if bytes.is_empty() || bytes.len() > state.cfg().max_upload_bytes {
         return Err(AppError::invalid("file", "fichier vide ou trop volumineux"));
     }
     if !bytes.starts_with(b"PK\x03\x04") {

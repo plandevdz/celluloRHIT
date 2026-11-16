@@ -473,6 +473,9 @@ impl Ctx {
     }
 
     fn site_names(&self) -> String {
+        if self.sites.is_empty() {
+            return "aucun site créé".into();
+        }
         self.sites.iter().map(|s| s.2.as_str()).collect::<Vec<_>>().join(", ")
     }
 
@@ -550,6 +553,9 @@ struct ProfileData {
 struct PersonData {
     first_name: String,
     last_name: String,
+    /// Site à créer (absent de l'application) ou « À préciser ».
+    #[serde(default)]
+    site_label: Option<String>,
     full_name: Option<String>,
     matricule: Option<String>,
     status: String,
@@ -1027,9 +1033,24 @@ async fn plan_person(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Optio
     match row.text(&["Site"]) {
         Some(s) => match ctx.site(&s) {
             Some(id) => d.site_id = Some(id),
-            None => plan.err(format!("Site inconnu « {s} » : créez-le en Administration (sites : {})", ctx.site_names())),
+            None => {
+                plan.warn(format!(
+                    "Site « {s} » absent de l'application (sites : {}) : il sera créé à l'application du lot",
+                    ctx.site_names()
+                ));
+                d.site_label = Some(s);
+            }
         },
-        None => plan.err("Site obligatoire"),
+        None => match ctx.site(SITE_A_PRECISER) {
+            Some(id) => {
+                plan.warn(format!("Site absent : fiche rattachée au site « {SITE_A_PRECISER} », à compléter par le RH"));
+                d.site_id = Some(id);
+            }
+            None => {
+                plan.warn(format!("Site absent : fiche rattachée au site « {SITE_A_PRECISER} » (créé à l'application), à compléter par le RH"));
+                d.site_label = Some(SITE_A_PRECISER.to_string());
+            }
+        },
     }
     if let Some(p) = row.text(&["ProfilPoste", "Profil de poste"]) {
         match ctx.profiles.get(&fold(&p)) {
@@ -1644,7 +1665,7 @@ async fn preview(
         }
     }
     let (file_name, bytes) = file.ok_or_else(|| AppError::invalid("file", "fichier manquant"))?;
-    if bytes.is_empty() || bytes.len() > state.config.max_upload_bytes {
+    if bytes.is_empty() || bytes.len() > state.cfg().max_upload_bytes {
         return Err(AppError::invalid("file", "fichier vide ou trop volumineux"));
     }
     let hash = sha256_hex(&bytes);
@@ -2325,8 +2346,47 @@ async fn apply_row(
     Ok((result, entity_id, extra))
 }
 
+/// Site technique des fiches reprises sans site : le RH les complète.
+pub const SITE_A_PRECISER: &str = "À préciser";
+
+/// Site existant (même libellé ou code, sans tenir compte des accents) ou
+/// créé pour la reprise, tracé dans le journal.
+async fn ensure_site(conn: &mut PgConnection, user: &CurrentUser, label: &str) -> AppResult<Uuid> {
+    let sites: Vec<(Uuid, String, String)> = sqlx::query_as("SELECT id, code, name FROM sites").fetch_all(&mut *conn).await?;
+    let l = fold(label);
+    if let Some((id, ..)) = sites.iter().find(|(_, c, n)| fold(c) == l || fold(n) == l) {
+        return Ok(*id);
+    }
+    let mut code: String = l.chars().filter(|c| c.is_ascii_alphanumeric()).collect::<String>().to_uppercase().chars().take(12).collect();
+    if code.is_empty() {
+        code = "SITE".into();
+    }
+    let mut candidate = code.clone();
+    let mut n = 2;
+    while sites.iter().any(|(_, c, _)| c.eq_ignore_ascii_case(&candidate)) {
+        candidate = format!("{code}{n}");
+        n += 1;
+    }
+    let id: Uuid = sqlx::query_scalar("INSERT INTO sites (code, name) VALUES ($1, $2) RETURNING id")
+        .bind(&candidate)
+        .bind(label.trim())
+        .fetch_one(&mut *conn)
+        .await?;
+    audit::record(
+        conn,
+        user,
+        Audit { action: "creation_site", entity: "site", entity_id: Some(id), data: Some(json!({ "code": candidate, "origine": "reprise" })), ..Default::default() },
+    )
+    .await?;
+    Ok(id)
+}
+
 async fn apply_person(conn: &mut PgConnection, user: &CurrentUser, d: &PersonData, target: Option<Uuid>) -> AppResult<(&'static str, Uuid)> {
-    let site_id = d.site_id.ok_or_else(|| AppError::invalid("site", "site obligatoire"))?;
+    let site_id = match (d.site_id, d.site_label.as_deref()) {
+        (Some(id), _) => id,
+        (None, Some(label)) => ensure_site(conn, user, label).await?,
+        (None, None) => return Err(AppError::invalid("site", "site obligatoire")),
+    };
     let (result, id) = match target {
         None => {
             let (planned, actual) = match d.status.as_str() {

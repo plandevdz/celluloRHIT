@@ -35,6 +35,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
     } else {
         ("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf")
     };
+    let data_dir_backup = data_dir.join("_sauvegardes");
     Config {
         database_url: String::new(),
         bind_addr: "127.0.0.1:0".into(),
@@ -59,6 +60,17 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
         alert_km: 1000,
         escalation_minutes: 60,
         disabled_modules: vec![],
+        graph_authority: "https://login.microsoftonline.com".into(),
+        graph_endpoint: "https://graph.microsoft.com".into(),
+        env_mail_cert: None,
+        env_archive_cert: None,
+        backup_dir: data_dir_backup,
+        pg_dump_bin: "pg_dump".into(),
+        gpg_bin: "gpg".into(),
+        caddy_data_dir: None,
+        database_password: None,
+        backup: None,
+        overridden: vec![],
     }
 }
 

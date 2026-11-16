@@ -367,7 +367,7 @@ async fn create(State(state): State<AppState>, user: CurrentUser, headers: Heade
     .await?;
     let response = json!({
         "case_id": case_id, "reference": reference, "departure_id": departure_id, "controls": specs.len(),
-        "visible_to": roles, "mail_mode": state.config.mail_mode.as_str(), "cancelled_transfer": cancelled_transfer,
+        "visible_to": roles, "mail_mode": state.cfg().mail_mode.as_str(), "cancelled_transfer": cancelled_transfer,
     });
     if let Some(k) = &key {
         idempotency::finish(&mut tx, user.id, k, StatusCode::CREATED, &response).await?;

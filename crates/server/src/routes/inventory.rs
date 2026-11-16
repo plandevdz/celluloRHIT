@@ -70,7 +70,7 @@ async fn labels_pdf(State(state): State<AppState>, user: CurrentUser, Query(q): 
     }
     let list: Vec<labels::Label> = rows.into_iter().map(|(token, inventory_no, text)| labels::Label { token, inventory_no, text }).collect();
     let count = list.len();
-    let config = state.config.clone();
+    let config = state.cfg();
     let start = q.start.unwrap_or(1);
     let pdf = tokio::task::spawn_blocking(move || labels::render(&list, fmt, start, &config.pdf_font, &config.pdf_font_bold))
         .await

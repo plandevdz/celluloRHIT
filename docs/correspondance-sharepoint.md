@@ -62,7 +62,10 @@ Répartition :
 | `Taches.OrdreTache` | Confirmée par le cahier | 01-Metier, M02 : « Un autre peut préparer l'adresse pendant que le premier prépare le PC. Seul un prérequis concret bloque » |
 | `UtilisateursApp.Role` | Règle provisoire du 16/11 | Règle provisoire du 16/11 : aucun droit automatique pour Manager, Moyens généraux et Responsable. |
 
-## Hypothèses générales en attente de votre accord
+## Hypothèses générales
+
+> **Sans objet depuis le 16/11/2026** : l'ancienne application n'a jamais été en production. Ses dossiers, tâches et documents étaient des essais ; il n'y a pas d'historique à préserver (voir `docs/pilote.md`, §0).
+
 
 - **H1 — anciens dossiers et tâches.** Les dossiers, tâches et modèles SharePoint ne sont pas recréés ; ils restent consultables en lecture seule.
   - Le cahier (T08) demande au contraire de « préserver identifiants de liens, références et dates » et de « contrôler les dossiers en cours ».

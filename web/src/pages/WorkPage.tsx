@@ -8,6 +8,8 @@ import { caseKindLabel, fmtDate, fmtDateTime, preferenceLabel, roleLabel, taskSt
 import { CaseTable } from "./HomePage";
 
 export type Task = {
+  instructions?: string | null;
+  display_order?: number;
   id: string;
   title: string;
   role: string;
@@ -140,6 +142,12 @@ export default function WorkPage() {
                     <td>
                       {t.title}
                       {t.need_preference && <div className="small muted">Demandé : {preferenceLabel[t.need_preference]}</div>}
+                      {t.instructions && (
+                        <details className="small">
+                          <summary>Consignes</summary>
+                          <div style={{ whiteSpace: "pre-wrap" }}>{t.instructions}</div>
+                        </details>
+                      )}
                     </td>
                     <td className="nowrap">
                       {t.due_at ? fmtDateTime(t.due_at) : fmtDate(t.due_date)}

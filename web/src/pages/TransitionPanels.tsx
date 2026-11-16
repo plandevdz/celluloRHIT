@@ -27,6 +27,10 @@ export function TransferDialog({ employee, onClose }: { employee: any; onClose: 
   const navigate = useNavigate();
   const sites = useLoad(() => api<any[]>("/sites"), []);
   const profiles = useLoad(() => api<any[]>("/job-profiles"), []);
+  const wilayas = useLoad(() => api<any[]>("/wilayas"), []);
+  const current: string[] = (employee.wilayas ?? []).map((w: any) => w.id);
+  const [changeWilayas, setChangeWilayas] = useState(false);
+  const [targetWilayas, setTargetWilayas] = useState<string[]>(current);
   const [f, setF] = useState({
     job_title: employee.job_title ?? "",
     site_id: employee.site_id ?? "",
@@ -50,6 +54,7 @@ export function TransferDialog({ employee, onClose }: { employee: any; onClose: 
       if (f.department !== (employee.department ?? "")) body.department = f.department;
       if (f.job_profile_id && f.job_profile_id !== (employee.job_profile_id ?? "")) body.job_profile_id = f.job_profile_id;
       if (manager && manager.id !== employee.manager_employee_id) body.manager_employee_id = manager.id;
+      if (changeWilayas) body.wilaya_ids = targetWilayas;
       const r = await api<{ reference: string }>("/transfers", { idempotencyKey: key, body });
       navigate(`/dossiers/${r.reference}`);
     } catch (err) {
@@ -99,6 +104,27 @@ export function TransferDialog({ employee, onClose }: { employee: any; onClose: 
           </Field>
         </div>
         <EmployeePicker value={manager} onChange={setManager} label="Manager cible (facultatif)" />
+        <fieldset>
+          <legend>Wilayas couvertes après la mutation</legend>
+          <label className="inline-choice">
+            <input type="checkbox" checked={changeWilayas} onChange={(e) => setChangeWilayas(e.target.checked)} /> Modifier les wilayas (sinon elles restent
+            inchangées : {(employee.wilayas ?? []).map((w: any) => `${w.code} ${w.name}`).join(", ") || "aucune"})
+          </label>
+          {changeWilayas && (
+            <div className="inline-choice" style={{ maxHeight: 180, overflowY: "auto" }}>
+              {wilayas.data?.filter((w) => w.active).map((w) => (
+                <label key={w.id}>
+                  <input
+                    type="checkbox"
+                    checked={targetWilayas.includes(w.id)}
+                    onChange={(e) => setTargetWilayas(e.target.checked ? [...targetWilayas, w.id] : targetWilayas.filter((x) => x !== w.id))}
+                  />
+                  {w.code} {w.name}
+                </label>
+              ))}
+            </div>
+          )}
+        </fieldset>
         <Field label="Note RH">
           <textarea rows={2} value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} />
         </Field>
@@ -191,6 +217,10 @@ export function TransferPanel({ t, onChange }: { t: any; onChange: () => void })
           <tr>
             <td>Profil</td>
             <td colSpan={2}>{t.target.profile ?? "aucun profil cible"}</td>
+          </tr>
+          <tr>
+            <td>Wilayas</td>
+            <td colSpan={2}>{t.target.wilayas == null ? "inchangées" : t.target.wilayas.length ? t.target.wilayas.join(", ") : "plus aucune wilaya"}</td>
           </tr>
           <tr>
             <td>Date d'effet</td>

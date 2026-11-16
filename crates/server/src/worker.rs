@@ -13,7 +13,7 @@ use crate::state::AppState;
 const TICK: Duration = Duration::from_secs(3);
 
 pub async fn run(state: AppState) -> anyhow::Result<()> {
-    tracing::info!(mode = ?state.config.mail_mode, "worker démarré");
+    tracing::info!(mode = ?state.cfg().mail_mode, "worker démarré");
     loop {
         if let Err(e) = tick(&state).await {
             tracing::error!(error = ?e, "cycle du worker en échec");
@@ -29,6 +29,10 @@ pub async fn run(state: AppState) -> anyhow::Result<()> {
 }
 
 pub async fn tick(state: &AppState) -> anyhow::Result<()> {
+    // Réglages modifiés dans l'interface : pris en compte au cycle suivant.
+    if let Err(e) = state.refresh().await {
+        tracing::error!(error = ?e, "lecture des réglages en échec");
+    }
     // Les échéances passent avant la distribution : un avis créé dans ce
     // cycle est remis dans le même cycle.
     if let Err(e) = check_deadlines(state).await {
@@ -42,6 +46,9 @@ pub async fn tick(state: &AppState) -> anyhow::Result<()> {
     generate_documents(state).await?;
     if let Err(e) = archive_documents(state).await {
         tracing::error!(error = ?e, "archivage en échec");
+    }
+    if let Err(e) = crate::backup::tick(state).await {
+        tracing::error!(error = ?e, "sauvegarde en échec");
     }
     Ok(())
 }
@@ -97,7 +104,7 @@ pub async fn expand_outbox(state: &AppState) -> anyhow::Result<()> {
             tracing::warn!(outbox = %id, "avis sans destinataire actif");
         } else {
             for r in &recipients {
-                let sent_to = state.config.mail_test_recipient.clone().unwrap_or_else(|| r.clone());
+                let sent_to = state.cfg().mail_test_recipient.clone().unwrap_or_else(|| r.clone());
                 sqlx::query(
                     "INSERT INTO deliveries (outbox_id, recipient_email, sent_to) VALUES ($1, $2, $3)
                      ON CONFLICT (outbox_id, recipient_email) DO NOTHING",
@@ -119,7 +126,7 @@ pub async fn expand_outbox(state: &AppState) -> anyhow::Result<()> {
 }
 
 pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
-    match state.config.mail_mode {
+    match state.cfg().mail_mode {
         // Période en mode journal (tests, pilote) : tout avis créé pendant
         // cette période est un avis de test. Une activation antérieure de
         // l'envoi est oubliée : la prochaine sera datée à nouveau.
@@ -169,7 +176,7 @@ pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
     .fetch_all(&state.pool)
     .await?;
     for (id, sent_to) in due {
-        match state.config.mail_mode {
+        match state.cfg().mail_mode {
             MailMode::Graph => deliver_graph(state, id, &sent_to).await?,
             MailMode::Journal => {
                 sqlx::query(
@@ -219,17 +226,18 @@ async fn deliver_graph(state: &AppState, id: Uuid, sent_to: &str) -> anyhow::Res
             .await
         }
     };
-    if !state.config.recipient_allowed(sent_to) {
+    if !state.cfg().recipient_allowed(sent_to) {
         finish("echec", "destinataire hors du périmètre pilote autorisé : aucun envoi".into(), None).await?;
         return Ok(());
     }
-    let (Some(client), Some(sender)) = (state.mailer.as_ref(), state.config.mail_sender.as_deref()) else {
+    let (mailer, cfg) = (state.mailer(), state.cfg());
+    let (Some(client), Some(sender)) = (mailer.as_ref(), cfg.mail_sender.as_deref()) else {
         finish("echec", "mode graph sans identité d'envoi configurée".into(), None).await?;
         return Ok(());
     };
     let mut text = body;
     if let Some(l) = link {
-        text.push_str(&format!("\nOuvrir dans l'application : {}{}\n", state.config.public_url.trim_end_matches('/'), l));
+        text.push_str(&format!("\nOuvrir dans l'application : {}{}\n", state.cfg().public_url.trim_end_matches('/'), l));
     }
     text.push_str("\n— Message automatique de l'application Celluloplast | Parcours salarié. Ne pas répondre.\n");
     match client.send_mail(sender, sent_to, &subject, &text).await {
@@ -266,7 +274,8 @@ const MAX_ARCHIVE_ATTEMPTS: i32 = 20;
 /// ou un redémarrage. La copie locale reste en place ; l'état « archivé »
 /// n'est posé qu'après vérification de l'identifiant et de la taille.
 pub async fn archive_documents(state: &AppState) -> anyhow::Result<()> {
-    let (Some(client), Some(target)) = (state.archiver.as_ref(), state.config.archive_target.as_ref()) else { return Ok(()) };
+    let (archiver, cfg) = (state.archiver(), state.cfg());
+    let (Some(client), Some(target)) = (archiver.as_ref(), cfg.archive_target.as_ref()) else { return Ok(()) };
     let due: Vec<(Uuid, String, i64, i32)> = sqlx::query_as(
         "WITH picked AS (
             SELECT id FROM document_versions
@@ -279,7 +288,7 @@ pub async fn archive_documents(state: &AppState) -> anyhow::Result<()> {
     .fetch_all(&state.pool)
     .await?;
     for (id, path, size, attempts) in due {
-        let bytes = match tokio::fs::read(state.config.data_dir.join(&path)).await {
+        let bytes = match tokio::fs::read(state.cfg().data_dir.join(&path)).await {
             Ok(b) => b,
             Err(e) => {
                 sqlx::query("UPDATE document_versions SET archive_status = 'echec', archive_error = $2 WHERE id = $1")
@@ -334,11 +343,11 @@ pub async fn process_transitions(state: &AppState) -> anyhow::Result<()> {
     let today = documents::algiers_today();
     // Module fermé (pilote) : aucune mutation appliquée, aucune coupure ni
     // relance de départ déclenchée automatiquement.
-    if state.config.module_on(Module::Mutation) {
+    if state.cfg().module_on(Module::Mutation) {
         crate::routes::transfers::apply_due(&state.pool, today).await?;
     }
-    if state.config.module_on(Module::Depart) {
-        crate::routes::departures::process_due(&state.pool, today, state.config.escalation_minutes).await?;
+    if state.cfg().module_on(Module::Depart) {
+        crate::routes::departures::process_due(&state.pool, today, state.cfg().escalation_minutes).await?;
     }
     Ok(())
 }
@@ -380,8 +389,8 @@ pub async fn check_deadlines(state: &AppState) -> anyhow::Result<()> {
     let today = documents::algiers_today();
     let mut conn = state.pool.acquire().await?;
     // Module fermé (pilote) : aucune alerte d'échéance n'est émise.
-    let items = if state.config.module_on(crate::config::Module::Vehicules) {
-        crate::routes::vehicles::deadlines_json(&mut conn, today, state.config.alert_days, state.config.alert_km)
+    let items = if state.cfg().module_on(crate::config::Module::Vehicules) {
+        crate::routes::vehicles::deadlines_json(&mut conn, today, state.cfg().alert_days, state.cfg().alert_km)
             .await
             .map_err(|e| anyhow::anyhow!("échéances véhicules : {e}"))?
     } else {
@@ -436,8 +445,8 @@ pub async fn check_deadlines(state: &AppState) -> anyhow::Result<()> {
         tx.commit().await?;
     }
     // Abonnements logiciels : alerte IT avant renouvellement.
-    let renewals = if state.config.module_on(crate::config::Module::Logiciels) {
-        crate::routes::software::renewals_json(&mut conn, today, state.config.alert_days)
+    let renewals = if state.cfg().module_on(crate::config::Module::Logiciels) {
+        crate::routes::software::renewals_json(&mut conn, today, state.cfg().alert_days)
             .await
             .map_err(|e| anyhow::anyhow!("échéances logiciels : {e}"))?
     } else {
@@ -484,7 +493,7 @@ pub async fn generate_documents(state: &AppState) -> anyhow::Result<()> {
     .fetch_all(&state.pool)
     .await?;
     for id in pending {
-        if let Err(e) = documents::ensure_original(&state.pool, &state.config, id).await {
+        if let Err(e) = documents::ensure_original(&state.pool, &state.cfg(), id).await {
             tracing::error!(document = %id, error = %e, "génération PDF en échec");
         }
     }

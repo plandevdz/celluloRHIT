@@ -256,6 +256,12 @@ export default function CasePage() {
                       <tr key={t.id}>
                         <td>
                           <strong>{t.title}</strong>
+                          {t.instructions && (
+                            <details className="small">
+                              <summary>Consignes</summary>
+                              <div style={{ whiteSpace: "pre-wrap" }}>{t.instructions}</div>
+                            </details>
+                          )}
                           <div className="small muted">
                             {roleLabel[t.role]} · échéance {t.due_at ? fmtDateTime(t.due_at) : fmtDate(t.due_date)}
                           </div>

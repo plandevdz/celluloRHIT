@@ -63,6 +63,8 @@ struct TaskRow {
     escalated_at: Option<DateTime<Utc>>,
     exit_control_id: Option<Uuid>,
     transfer_delta_id: Option<Uuid>,
+    instructions: Option<String>,
+    display_order: i32,
 }
 
 /// « Mon travail » : files cumulées de toutes mes habilitations, sans
@@ -89,7 +91,8 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
                 c.id AS case_id, c.reference AS case_reference, c.kind AS case_kind,
                 e.id AS employee_id, e.first_name || ' ' || e.last_name AS employee_name, s.name AS site_name,
                 n.category AS need_category, n.preference AS need_preference, t.training_session_id, t.resolution,
-                t.not_before, t.due_at, t.escalated_at, t.exit_control_id, t.transfer_delta_id
+                t.not_before, t.due_at, t.escalated_at, t.exit_control_id, t.transfer_delta_id,
+                t.instructions, t.display_order
            FROM tasks t
            JOIN cases c ON c.id = t.case_id
            JOIN employees e ON e.id = c.employee_id
@@ -99,7 +102,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
            LEFT JOIN case_needs n ON n.id = t.need_id
           WHERE t.status = ANY($1)
             AND (CASE WHEN $2 THEN t.owner_id = $3 ELSE (t.role = ANY($4) OR t.owner_id = $3) END)
-          ORDER BY (t.status = 'a_faire') DESC, t.due_date NULLS LAST, t.created_at
+          ORDER BY (t.status = 'a_faire') DESC, t.due_date NULLS LAST, t.display_order, t.created_at
           LIMIT 500",
     )
     .bind(&status_filter)

@@ -383,12 +383,13 @@ export function RepriseTab() {
   };
   return (
     <div className="stack">
-      <Section title="Reprise des listes SharePoint">
+      <Section title="Import des listes (données de départ)">
         <Notice kind="info">
-          Exportez chaque liste depuis SharePoint (« Exporter » → CSV, ou classeur Excel), puis chargez-la ici <strong>dans l'ordre proposé</strong> :
-          les références d'abord, le personnel, puis le parc et les affectations. Chaque fichier passe par un aperçu sans écriture ; les
-          lignes ambiguës attendent votre décision ; aucune arrivée, tâche ni avis n'est créé. Incluez la colonne <strong>ID</strong> si possible :
-          elle conserve les liens et évite les doublons au rejeu.
+          Chargez ici les listes exportées de l'ancienne application (SharePoint, CSV ou classeur Excel) pour constituer les données de départ,
+          <strong> dans l'ordre proposé</strong> : les références d'abord, le personnel, puis le parc et les affectations. Chaque fichier passe par
+          un aperçu sans écriture ; les lignes ambiguës attendent votre décision ; aucune arrivée, tâche ni avis n'est créé. Les listes
+          incomplètes sont acceptées : les fiches sans site sont rattachées au site « À préciser » et chaque équipe complète ensuite ses fiches
+          (filtre « À compléter » du Personnel et du Parc IT).
         </Notice>
         <form onSubmit={submit}>
           <div className="form-grid">
@@ -418,10 +419,9 @@ export function RepriseTab() {
             </p>
           )}
           <p className="small muted">
-            Avant le Personnel : créez les sites en Administration. Dates attendues au format jj/mm/aaaa (ou ISO). Les dossiers, tâches et modèles
-            de tâches ne sont pas repris dans cette version (décision en attente) : ils restent consultables dans SharePoint ; la
-            référence et le dossier d'origine de chaque affectation ou formation reprise sont conservés en texte. Les anciennes décharges
-            signées restent dans la bibliothèque SharePoint.
+            Un site inconnu du fichier (ex. « Cheraga ») est créé à l'application du lot s'il n'existe pas déjà (les accents et majuscules sont
+            ignorés pour le rapprochement). Dates attendues au format jj/mm/aaaa (ou ISO). Les dossiers et tâches de l'ancienne application ne
+            sont pas importés : ce n'étaient que des essais.
           </p>
           <ErrorBox error={error} />
           <button className="btn btn-primary" disabled={busy || !file || !list}>

@@ -167,9 +167,9 @@ struct DeadlineQuery {
 /// Échéances : pièces, entretiens et fins de location à venir ou dépassées.
 async fn deadlines(State(state): State<AppState>, user: CurrentUser, Query(q): Query<DeadlineQuery>) -> AppResult<Json<Value>> {
     user.require(FLEET)?;
-    let days = q.days.unwrap_or(state.config.alert_days).clamp(1, 365);
+    let days = q.days.unwrap_or(state.cfg().alert_days).clamp(1, 365);
     let mut conn = state.pool.acquire().await?;
-    Ok(Json(deadlines_json(&mut conn, crate::documents::algiers_today(), days, state.config.alert_km).await?))
+    Ok(Json(deadlines_json(&mut conn, crate::documents::algiers_today(), days, state.cfg().alert_km).await?))
 }
 
 pub async fn deadlines_json(conn: &mut PgConnection, today: NaiveDate, days: i32, warn_km: i32) -> AppResult<Value> {

@@ -57,6 +57,9 @@ struct ListQuery {
     profile_id: Option<Uuid>,
     /// Une personne qui couvre plusieurs wilayas apparaît pour chacune.
     wilaya_id: Option<Uuid>,
+    /// Fiches à compléter (site ou poste « À préciser », matricule,
+    /// département ou contrat manquant).
+    incomplet: Option<bool>,
     page: Option<i64>,
 }
 
@@ -69,7 +72,17 @@ pub const EMPLOYEE_FILTERS: &str = "
             AND ($3::uuid IS NULL OR p.site_id = $3)
             AND ($6::text IS NULL OR lower(coalesce(p.department, '')) = lower($6))
             AND ($7::uuid IS NULL OR p.job_profile_id = $7)
-            AND ($8::uuid IS NULL OR EXISTS (SELECT 1 FROM employee_wilayas w WHERE w.employee_id = e.id AND w.wilaya_id = $8))";
+            AND ($8::uuid IS NULL OR EXISTS (SELECT 1 FROM employee_wilayas w WHERE w.employee_id = e.id AND w.wilaya_id = $8))
+            AND ($9::bool IS NOT TRUE OR p.site_id IN (SELECT id FROM sites WHERE name = 'À préciser') OR p.job_title = 'À préciser'
+                 OR e.matricule IS NULL OR p.department IS NULL OR e.contract_type IS NULL)";
+
+/// Champs manquants d'une fiche (liste du personnel).
+const MISSING_FIELDS: &str = "array_remove(ARRAY[
+                CASE WHEN s.name = 'À préciser' THEN 'site' END,
+                CASE WHEN p.job_title = 'À préciser' THEN 'poste' END,
+                CASE WHEN e.matricule IS NULL THEN 'matricule' END,
+                CASE WHEN p.department IS NULL THEN 'département' END,
+                CASE WHEN e.contract_type IS NULL THEN 'contrat' END], NULL)";
 
 #[derive(Serialize, FromRow)]
 struct EmployeeListRow {
@@ -86,6 +99,7 @@ struct EmployeeListRow {
     department: Option<String>,
     profile_name: Option<String>,
     wilayas: Vec<String>,
+    missing: Vec<String>,
 }
 
 const PAGE_SIZE: i64 = 50;
@@ -101,7 +115,8 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
                 (SELECT count(*) FROM cases c WHERE c.employee_id = e.id AND c.status = 'ouvert') AS open_cases,
                 e.leaving, p.department, jp.name AS profile_name,
                 (SELECT coalesce(array_agg(w.code::text || ' ' || w.name ORDER BY w.code), '{{}}')
-                   FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilayas
+                   FROM employee_wilayas ew JOIN wilayas w ON w.id = ew.wilaya_id WHERE ew.employee_id = e.id) AS wilayas,
+                {MISSING_FIELDS} AS missing
            FROM employees e
            LEFT JOIN LATERAL (SELECT * FROM employee_positions WHERE employee_id = e.id ORDER BY valid_to IS NULL DESC, valid_from DESC LIMIT 1) p ON true
            LEFT JOIN sites s ON s.id = p.site_id
@@ -118,6 +133,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
     .bind(&department)
     .bind(q.profile_id)
     .bind(q.wilaya_id)
+    .bind(q.incomplet)
     .fetch_all(&state.pool)
     .await?;
     let total: i64 = sqlx::query_scalar(&format!(
@@ -133,6 +149,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
     .bind(&department)
     .bind(q.profile_id)
     .bind(q.wilaya_id)
+    .bind(q.incomplet)
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(json!({ "items": rows, "total": total, "page": page, "page_size": PAGE_SIZE })))
@@ -608,6 +625,10 @@ struct UpdateInput {
     clear_manager: bool,
     job_profile_id: Option<Uuid>,
     department: Option<String>,
+    /// Poste et site de la situation en cours, corrigés librement par le RH
+    /// (fiche incomplète ou erronée). Tracé dans le journal (avant/après).
+    job_title: Option<String>,
+    site_id: Option<Uuid>,
     /// « En départ » : prépare sa sortie, sans dossier OFF complet.
     leaving: Option<bool>,
     /// `Some("")` efface la date de sortie prévue.
@@ -716,6 +737,33 @@ async fn update(
         .execute(&mut *tx)
         .await?;
     }
+    let mut situation = Value::Null;
+    if input.job_title.is_some() || input.site_id.is_some() {
+        let before: Option<(String, Uuid)> =
+            sqlx::query_as("SELECT job_title, site_id FROM employee_positions WHERE employee_id = $1 AND valid_to IS NULL FOR UPDATE")
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let (old_title, old_site) = before.ok_or_else(|| AppError::conflict("aucune situation en cours pour ce salarié"))?;
+        let title = match &input.job_title {
+            Some(t) => required("job_title", t, "poste")?,
+            None => old_title.clone(),
+        };
+        if let Some(site) = input.site_id {
+            let ok: bool = sqlx::query_scalar("SELECT EXISTS (SELECT 1 FROM sites WHERE id = $1 AND active)").bind(site).fetch_one(&mut *tx).await?;
+            if !ok {
+                return Err(AppError::invalid("site_id", "site inconnu ou fermé"));
+            }
+        }
+        let site = input.site_id.unwrap_or(old_site);
+        sqlx::query("UPDATE employee_positions SET job_title = $2, site_id = $3 WHERE employee_id = $1 AND valid_to IS NULL")
+            .bind(id)
+            .bind(&title)
+            .bind(site)
+            .execute(&mut *tx)
+            .await?;
+        situation = json!({ "poste_avant": old_title, "poste_apres": title, "site_avant": old_site, "site_apres": site });
+    }
     audit::record(
         &mut tx,
         &user,
@@ -727,7 +775,7 @@ async fn update(
             data: Some(json!({
                 "matricule_avant": matricule, "matricule_apres": new_matricule, "contrat": contract,
                 "manager": input.manager_employee_id, "profil": input.job_profile_id, "wilayas": input.wilaya_ids,
-                "en_depart": input.leaving, "sortie_prevue": input.planned_exit_date,
+                "en_depart": input.leaving, "sortie_prevue": input.planned_exit_date, "situation": situation,
             })),
             ..Default::default()
         },

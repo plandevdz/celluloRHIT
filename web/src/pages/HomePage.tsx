@@ -19,8 +19,22 @@ type CaseItem = {
   unowned_tasks: number;
 };
 
+/** Rappel à l'ADMIN : aucune sauvegarde réussie depuis 26 heures. */
+function BackupReminder() {
+  const runs = useLoad(() => api<any[]>("/admin/backups"), []);
+  if (!runs.data) return null;
+  const last = runs.data.find((r) => r.status === "reussie");
+  if (last && Date.now() - new Date(last.finished_at).getTime() < 26 * 3600 * 1000) return null;
+  return (
+    <div className="alert alert-warn" role="status">
+      {last ? "Aucune sauvegarde réussie depuis plus de 26 heures." : "Aucune sauvegarde n'a encore été faite."}{" "}
+      <Link to="/administration?onglet=sauvegardes">Ouvrir les sauvegardes</Link>
+    </div>
+  );
+}
+
 export default function HomePage() {
-  const { on } = useAuth();
+  const { on, has } = useAuth();
   const onb = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=ONB&status=ouvert"), []);
   const dem = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=DEM&status=ouvert"), []);
   const toCheck = useLoad(() => api<any[]>("/employees/arrivals-to-check"), []);
@@ -44,6 +58,7 @@ export default function HomePage() {
           </Link>
         }
       />
+      {has("ADMIN") && <BackupReminder />}
       <div className="stat-row">
         <div className="stat">
           <div className="value">{arrivals.length}</div>

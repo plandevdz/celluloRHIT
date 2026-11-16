@@ -135,7 +135,7 @@ impl FromRequestParts<AppState> for CurrentUser {
             return Err(AppError::Unauthorized);
         }
         let hash = hash_token(token);
-        let idle = state.config.session_idle_minutes;
+        let idle = state.cfg().session_idle_minutes;
         let row: Option<(Uuid, String, String)> = sqlx::query_as(
             "UPDATE sessions s SET last_seen_at = now()
                FROM users u

@@ -22,6 +22,19 @@ import { ImportBatchPage, ImportStartPage } from "./pages/ImportPage";
 import ReturnPage from "./pages/ReturnPage";
 import TrainingsPage from "./pages/TrainingsPage";
 import WorkPage from "./pages/WorkPage";
+import { ProfilesTab, WilayasTab } from "./pages/AdminExtras";
+import { PageHeader as RefHeader } from "./components";
+
+/** Référentiels métier tenus par le RH : profils de poste et wilayas. */
+function ReferentialsPage() {
+  return (
+    <div className="stack">
+      <RefHeader title="Profils de poste et wilayas" subtitle="Référentiels du RH : modifiables ici, sans passer par l'administration." />
+      <ProfilesTab />
+      <WilayasTab />
+    </div>
+  );
+}
 
 type NavItem = { to: string; label: string; roles?: Role[]; end?: boolean; module?: string };
 
@@ -34,6 +47,7 @@ const NAV: NavItem[] = [
   { to: "/parc", label: "Parc IT", roles: ["IT", "ADMIN"] },
   { to: "/vehicules", label: "Véhicules", roles: ["RH", "ADMIN"], module: "vehicules" },
   { to: "/formations", label: "Formations", roles: ["FORMATION", "RH", "ADMIN"] },
+  { to: "/referentiels", label: "Profils et wilayas", roles: ["RH"] },
   { to: "/etats", label: "États", roles: ["RH", "ADMIN", "IT"], module: "etats" },
   { to: "/administration", label: "Administration", roles: ["ADMIN"] },
 ];
@@ -101,6 +115,7 @@ export default function App() {
           <Route path="/etats" element={<ModuleRoute module="etats"><EtatsPage /></ModuleRoute>} />
           <Route path="/administration/reprise/:id" element={<RepriseBatchPage />} />
           <Route path="/formations" element={<TrainingsPage />} />
+          <Route path="/referentiels" element={<ReferentialsPage />} />
           <Route path="/administration" element={<AdminPage />} />
           <Route path="*" element={<NotFound />} />
         </Routes>

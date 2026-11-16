@@ -91,3 +91,18 @@ Joué dans le navigateur sur une instance neuve (`MODULES_DESACTIVES=pilote`, mo
 | Adresse cPanel reprise sans preuve de vérification | **nav** : « Adresse reprise — vérification non renseignée », M365 décoché ; « Actif (vérifié) » proposé. **auto** : « à vérifier » ne date rien |
 | Traitements automatiques | **auto** : aucune alerte véhicule, aucune mutation ni coupure appliquée par le worker |
 | Anciens avis de test | **auto** : à l'activation d'Exchange, les avis créés en mode journal sont consignés, jamais envoyés ; les nouveaux sont traités. Non joué avec un vrai Exchange |
+
+## Administration et données de départ (16/11/2026)
+
+Couvert par le test `administration` (5 tests) et joué dans le navigateur sur une base locale jetable.
+
+| Essai | Résultat |
+|---|---|
+| Ouvrir puis refermer un module depuis Paramètres | **nav** : menu et page Véhicules apparaissent puis disparaissent ; **auto** : API refusée ou ouverte sans redémarrage, faute de frappe refusée |
+| Envoi Exchange | **auto** : refus sans certificat ; certificat généré (seule la partie publique téléchargeable) ; activation puis retour au mode journal, sans appel réseau. Non joué avec un vrai Exchange |
+| Modèle de tâche « PC » : libellé, consignes, J-3, ordre | **auto** : tâche créée avec ces valeurs ; autres tâches inchangées ; tâches existantes non réécrites |
+| Import des listes réelles exportées (base locale jetable, supprimée ensuite) | **nav** : Wilayas 58, Catalogue 8, Utilisateurs 5, Profils 18, Personnel 115 (109 « À préciser », 53 managers reliés), Matériel 224, Lignes 1, Affectations 1 : tout appliqué |
+| Compléter les fiches | **nav** : filtre « À compléter » ; site de 224 actifs changé en lot ; **auto** : poste et site par le RH, accessoire, SIM, ligne par l'IT, refus croisés |
+| Sauvegarde chiffrée depuis l'écran | **nav** : clé publique collée, « Sauvegarder maintenant », 4 fichiers téléchargeables ; **auto** : dump illisible sans la clé privée, déchiffré avec elle (format PostgreSQL), documents présents, clé privée refusée |
+| Wilayas cibles d'une mutation | **auto** : refus d'une wilaya inconnue ; inchangées avant l'effet, remplacées à l'application |
+| Restauration complète sur une autre machine | **Non exécutée** |

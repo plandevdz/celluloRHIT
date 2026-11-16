@@ -36,6 +36,11 @@ export function DocumentActions({ documentId, status: initial, onChange }: { doc
         <a className="btn btn-small" href={`/api/v1/documents/${documentId}/original`} target="_blank" rel="noopener">
           Imprimer la décharge (PDF)
         </a>
+        {status === "signe" && (
+          <a className="btn btn-small" href={`/api/v1/documents/${documentId}/scan`} target="_blank" rel="noopener">
+            Ouvrir le scan signé
+          </a>
+        )}
         <button className="btn btn-small" disabled={busy} onClick={() => input.current?.click()}>
           {busy ? "Envoi du scan…" : status === "signe" ? "Déposer un autre scan" : "Déposer le scan signé"}
         </button>
@@ -48,7 +53,7 @@ export function DocumentActions({ documentId, status: initial, onChange }: { doc
         />
       </div>
       <p className="small muted" style={{ margin: ".3rem 0 0" }}>
-        Archivage SharePoint : non raccordé dans cette version (copie conservée sur le serveur).
+        Original et scans conservés sur le serveur de l'application (sauvegardés chaque jour).
       </p>
       {saved && (
         <p className="alert alert-ok" role="status" style={{ margin: ".4rem 0 0" }}>

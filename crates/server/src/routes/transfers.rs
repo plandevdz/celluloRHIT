@@ -300,6 +300,8 @@ struct CreateInput {
     department: Option<String>,
     manager_employee_id: Option<Uuid>,
     job_profile_id: Option<Uuid>,
+    /// Wilayas couvertes après la mutation. Absent : inchangées.
+    wilaya_ids: Option<Vec<Uuid>>,
     note: Option<String>,
 }
 
@@ -372,10 +374,23 @@ async fn create(State(state): State<AppState>, user: CurrentUser, headers: Heade
     .fetch_one(&mut *tx)
     .await?;
     let (snapshot, deltas) = compare(&mut tx, i.employee_id, &cur, profile).await?;
+    let target_wilayas: Option<Vec<Uuid>> = match &i.wilaya_ids {
+        None => None,
+        Some(ws) => {
+            let mut ws = ws.clone();
+            ws.sort();
+            ws.dedup();
+            let known: i64 = sqlx::query_scalar("SELECT count(*) FROM wilayas WHERE id = ANY($1)").bind(&ws).fetch_one(&mut *tx).await?;
+            if known != ws.len() as i64 {
+                return Err(AppError::invalid("wilaya_ids", "wilaya inconnue"));
+            }
+            Some(ws)
+        }
+    };
     let transfer_id: Uuid = sqlx::query_scalar(
         "INSERT INTO transfers (case_id, employee_id, from_position_id, target_job_title, target_site_id, target_department,
-                                target_manager, target_manager_employee_id, target_profile_id, effective_date, snapshot)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id",
+                                target_manager, target_manager_employee_id, target_profile_id, effective_date, snapshot, target_wilaya_ids)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12) RETURNING id",
     )
     .bind(case_id)
     .bind(i.employee_id)
@@ -388,6 +403,7 @@ async fn create(State(state): State<AppState>, user: CurrentUser, headers: Heade
     .bind(profile)
     .bind(i.effective_date)
     .bind(&snapshot)
+    .bind(&target_wilayas)
     .fetch_one(&mut *tx)
     .await
     .map_err(|e| match AppError::from(e) {
@@ -395,6 +411,7 @@ async fn create(State(state): State<AppState>, user: CurrentUser, headers: Heade
         other => other,
     })?;
     store_deltas(&mut tx, transfer_id, &deltas).await?;
+    let _ = &target_wilayas;
     audit::record(
         &mut tx,
         &user,
@@ -600,7 +617,7 @@ async fn confirm(State(state): State<AppState>, user: CurrentUser, Path(id): Pat
     }
     audit::record(&mut tx, &user, Audit { action: "mutation_confirmee", entity: "transfer", entity_id: Some(id), case_id: Some(t.case_id), employee_id: Some(t.employee_id), data: Some(json!({ "actions": lines })), }).await?;
     tx.commit().await?;
-    Ok(Json(json!({ "status": "confirmee", "version": t.version + 1, "visible_to": roles, "mail_mode": state.config.mail_mode.as_str() })))
+    Ok(Json(json!({ "status": "confirmee", "version": t.version + 1, "visible_to": roles, "mail_mode": state.cfg().mail_mode.as_str() })))
 }
 
 #[derive(Deserialize)]
@@ -751,16 +768,16 @@ pub async fn apply_due(pool: &sqlx::PgPool, today: NaiveDate) -> anyhow::Result<
     let mut applied = 0;
     for id in due {
         let mut tx = pool.begin().await?;
-        type Row = (Uuid, Uuid, String, Uuid, NaiveDate, String, Uuid, Option<String>, Option<String>, Option<Uuid>, Option<Uuid>, String);
+        type Row = (Uuid, Uuid, String, Uuid, NaiveDate, String, Uuid, Option<String>, Option<String>, Option<Uuid>, Option<Uuid>, String, Option<Vec<Uuid>>);
         let row: Option<Row> = sqlx::query_as(
             "SELECT t.case_id, t.employee_id, t.status, t.from_position_id, t.effective_date, t.target_job_title, t.target_site_id,
-                    t.target_department, t.target_manager, t.target_manager_employee_id, t.target_profile_id, c.reference
+                    t.target_department, t.target_manager, t.target_manager_employee_id, t.target_profile_id, c.reference, t.target_wilaya_ids
                FROM transfers t JOIN cases c ON c.id = t.case_id WHERE t.id = $1 FOR UPDATE OF t SKIP LOCKED",
         )
         .bind(id)
         .fetch_optional(&mut *tx)
         .await?;
-        let Some((case_id, employee_id, status, from_position, effective, job_title, site_id, department, manager, manager_id, profile, reference)) = row else {
+        let Some((case_id, employee_id, status, from_position, effective, job_title, site_id, department, manager, manager_id, profile, reference, wilayas)) = row else {
             continue;
         };
         if status != "confirmee" {
@@ -830,10 +847,20 @@ pub async fn apply_due(pool: &sqlx::PgPool, today: NaiveDate) -> anyhow::Result<
         .bind(new_position)
         .execute(&mut *tx)
         .await?;
+        if let Some(ws) = &wilayas {
+            sqlx::query("DELETE FROM employee_wilayas WHERE employee_id = $1").bind(employee_id).execute(&mut *tx).await?;
+            for w in ws {
+                sqlx::query("INSERT INTO employee_wilayas (employee_id, wilaya_id) VALUES ($1, $2) ON CONFLICT DO NOTHING")
+                    .bind(employee_id)
+                    .bind(w)
+                    .execute(&mut *tx)
+                    .await?;
+            }
+        }
         sqlx::query("UPDATE employees SET version = version + 1, updated_at = now() WHERE id = $1").bind(employee_id).execute(&mut *tx).await?;
         audit::record_system(
             &mut tx,
-            Audit { action: "mutation_appliquee", entity: "transfer", entity_id: Some(id), case_id: Some(case_id), employee_id: Some(employee_id), data: Some(json!({ "poste": job_title, "effet": effective, "situation": new_position })) },
+            Audit { action: "mutation_appliquee", entity: "transfer", entity_id: Some(id), case_id: Some(case_id), employee_id: Some(employee_id), data: Some(json!({ "poste": job_title, "effet": effective, "situation": new_position, "wilayas": wilayas })) },
         )
         .await?;
         crate::worker::enqueue_system(
@@ -924,7 +951,9 @@ pub async fn case_json(conn: &mut PgConnection, case_id: Uuid) -> AppResult<Valu
         "SELECT jsonb_build_object('id', t.id, 'status', t.status, 'version', t.version, 'effective_date', t.effective_date,
                 'target', jsonb_build_object('job_title', t.target_job_title, 'site_id', t.target_site_id, 'site', s.name,
                           'department', t.target_department, 'manager', t.target_manager, 'manager_employee_id', t.target_manager_employee_id,
-                          'profile_id', t.target_profile_id, 'profile', jp.name),
+                          'profile_id', t.target_profile_id, 'profile', jp.name,
+                          'wilayas', CASE WHEN t.target_wilaya_ids IS NULL THEN NULL ELSE
+                              (SELECT coalesce(jsonb_agg(w.code::text || ' ' || w.name ORDER BY w.code), '[]') FROM wilayas w WHERE w.id = ANY(t.target_wilaya_ids)) END),
                 'snapshot', t.snapshot, 'conflict', t.conflict, 'confirmed_at', t.confirmed_at, 'applied_at', t.applied_at,
                 'cancelled_at', t.cancelled_at, 'cancel_reason', t.cancel_reason,
                 'position_changed', t.from_position_id IS DISTINCT FROM (SELECT p.id FROM employee_positions p WHERE p.employee_id = t.employee_id AND p.valid_to IS NULL)

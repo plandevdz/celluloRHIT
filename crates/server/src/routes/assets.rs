@@ -21,7 +21,9 @@ pub fn routes() -> Router<AppState> {
         .route("/assets/lookup/{code}", get(lookup))
         .route("/assets/{id}", get(detail).patch(update))
         .route("/accessories", get(list_accessories).post(create_accessory))
+        .route("/accessories/{id}", axum::routing::patch(update_accessory))
         .route("/accessories/{id}/stock", post(adjust_stock))
+        .route("/sims/{id}", axum::routing::patch(update_sim))
         .route("/sims", get(list_sims).post(create_sim))
         .route("/lines", get(list_lines))
         .route("/lines/{id}", axum::routing::patch(update_line))
@@ -44,6 +46,8 @@ struct ListQuery {
     status: Option<String>,
     kind: Option<String>,
     site_id: Option<Uuid>,
+    /// Fiches à compléter : n° de série, marque, modèle ou site manquant.
+    incomplet: Option<bool>,
 }
 
 #[derive(Serialize, FromRow)]
@@ -68,13 +72,19 @@ struct AssetRow {
     warranty_end: Option<chrono::NaiveDate>,
     condition: Option<String>,
     location_id: Option<Uuid>,
+    missing: Vec<String>,
 }
 
 const ASSET_SELECT: &str = "
     SELECT a.id, a.inventory_no, a.qr_token, a.kind, a.label, a.serial_no, a.status, a.site_id,
            s.name AS site_name, l.name AS location_name,
            e.id AS holder_id, e.first_name || ' ' || e.last_name AS holder_name, a.version,
-           a.brand, a.model, a.intune_name, a.purchase_date, a.warranty_end, a.condition, a.location_id
+           a.brand, a.model, a.intune_name, a.purchase_date, a.warranty_end, a.condition, a.location_id,
+           array_remove(ARRAY[
+               CASE WHEN a.serial_no IS NULL THEN 'n° de série' END,
+               CASE WHEN a.brand IS NULL THEN 'marque' END,
+               CASE WHEN a.model IS NULL THEN 'modèle' END,
+               CASE WHEN a.site_id IS NULL THEN 'site' END], NULL) AS missing
       FROM assets a
       LEFT JOIN sites s ON s.id = a.site_id
       LEFT JOIN locations l ON l.id = a.location_id
@@ -92,12 +102,14 @@ async fn list(State(state): State<AppState>, user: CurrentUser, Query(q): Query<
             AND ($2::text IS NULL OR a.status = $2)
             AND ($3::text IS NULL OR a.kind = $3)
             AND ($4::uuid IS NULL OR a.site_id = $4)
-          ORDER BY a.inventory_no LIMIT 500"
+            AND ($5::bool IS NOT TRUE OR a.serial_no IS NULL OR a.brand IS NULL OR a.model IS NULL OR a.site_id IS NULL)
+          ORDER BY a.inventory_no LIMIT 2000"
     ))
     .bind(&search)
     .bind(&q.status)
     .bind(&q.kind)
     .bind(q.site_id)
+    .bind(q.incomplet)
     .fetch_all(&state.pool)
     .await?;
     Ok(Json(rows))
@@ -327,6 +339,62 @@ async fn create_accessory(State(state): State<AppState>, user: CurrentUser, Json
 }
 
 #[derive(Deserialize)]
+struct AccessoryUpdate {
+    label: Option<String>,
+    site_id: Option<Uuid>,
+    #[serde(default)]
+    clear_site: bool,
+}
+
+/// Libellé et site d'un accessoire (le stock passe par un ajustement motivé).
+async fn update_accessory(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<AccessoryUpdate>) -> AppResult<Json<Value>> {
+    user.require(PARC)?;
+    let label = match &i.label {
+        Some(l) => Some(domain::text::clean(l).ok_or_else(|| AppError::invalid("label", "libellé obligatoire"))?),
+        None => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query(
+        "UPDATE accessories SET label = coalesce($2, label),
+                site_id = CASE WHEN $4 THEN NULL ELSE coalesce($3, site_id) END WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&label)
+    .bind(i.site_id)
+    .bind(i.clear_site)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("accessoire"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "accessoire_modifie", entity: "accessory", entity_id: Some(id), data: Some(json!({ "label": label, "site": i.site_id })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct SimUpdate {
+    iccid: String,
+}
+
+/// Correction de la référence (ICCID) d'une SIM saisie ou reprise avec erreur.
+async fn update_sim(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<SimUpdate>) -> AppResult<Json<Value>> {
+    user.require(PARC)?;
+    let iccid: String = i.iccid.chars().filter(|c| !c.is_whitespace()).collect();
+    if iccid.is_empty() {
+        return Err(AppError::invalid("iccid", "référence SIM obligatoire"));
+    }
+    let mut tx = state.pool.begin().await?;
+    let before: Option<String> = sqlx::query_scalar("SELECT iccid FROM sim_cards WHERE id = $1 FOR UPDATE").bind(id).fetch_optional(&mut *tx).await?;
+    let before = before.ok_or_else(|| AppError::not_found("SIM"))?;
+    sqlx::query("UPDATE sim_cards SET iccid = $2 WHERE id = $1").bind(id).bind(&iccid).execute(&mut *tx).await?;
+    audit::record(&mut tx, &user, Audit { action: "sim_modifiee", entity: "sim", entity_id: Some(id), data: Some(json!({ "avant": before, "apres": iccid })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 struct StockInput {
     delta: i32,
     reason: String,
@@ -416,6 +484,9 @@ async fn list_lines(State(state): State<AppState>, user: CurrentUser) -> AppResu
 
 #[derive(Deserialize)]
 struct LineUpdate {
+    /// Correction du numéro ou de l'opérateur (saisie ou reprise erronée).
+    number: Option<String>,
+    operator: Option<String>,
     plan: Option<String>,
     line_type: Option<String>,
     status: Option<String>,
@@ -437,19 +508,22 @@ async fn update_line(State(state): State<AppState>, user: CurrentUser, Path(id):
     }
     let mut tx = state.pool.begin().await?;
     let n = sqlx::query(
-        "UPDATE mobile_lines SET plan = coalesce($2, plan), line_type = coalesce($3, line_type), status = coalesce($4, status) WHERE id = $1",
+        "UPDATE mobile_lines SET plan = coalesce($2, plan), line_type = coalesce($3, line_type), status = coalesce($4, status),
+                number = coalesce($5, number), operator = coalesce($6, operator) WHERE id = $1",
     )
     .bind(id)
     .bind(i.plan.as_deref().and_then(domain::text::clean))
     .bind(&line_type)
     .bind(&i.status)
+    .bind(i.number.as_deref().map(|n| n.chars().filter(|c| !c.is_whitespace()).collect::<String>()).filter(|n| !n.is_empty()))
+    .bind(i.operator.as_deref().and_then(domain::text::clean))
     .execute(&mut *tx)
     .await?
     .rows_affected();
     if n == 0 {
         return Err(AppError::not_found("ligne"));
     }
-    audit::record(&mut tx, &user, Audit { action: "ligne_modifiee", entity: "mobile_line", entity_id: Some(id), data: Some(json!({ "status": i.status, "motif": reason })), ..Default::default() }).await?;
+    audit::record(&mut tx, &user, Audit { action: "ligne_modifiee", entity: "mobile_line", entity_id: Some(id), data: Some(json!({ "status": i.status, "motif": reason, "numero": i.number, "operateur": i.operator })), ..Default::default() }).await?;
     tx.commit().await?;
     Ok(Json(json!({ "ok": true })))
 }

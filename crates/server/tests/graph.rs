@@ -130,7 +130,7 @@ fn graph(base: &str, cert: &std::path::Path, key: &std::path::Path, client: &str
 
 async fn graph_app(pool: PgPool, base: &str, cert: &std::path::Path, key: &std::path::Path, allowed: Vec<String>) -> (TestApp, AppState) {
     let app = TestApp::new(pool.clone()).await;
-    let mut config = test_config(app.state.config.data_dir.clone());
+    let mut config = test_config(app.state.cfg().data_dir.clone());
     config.mail_mode = MailMode::Graph;
     config.mail_sender = Some("avis@exemple.test".into());
     config.mail_graph = Some(graph(base, cert, key, "app-envoi"));
@@ -217,7 +217,7 @@ async fn r13_archive_sharepoint_reprise_apres_panne(pool: PgPool) {
         .await;
     assert_eq!(status, StatusCode::CREATED);
     let doc = h["document_id"].as_str().unwrap().to_string();
-    server::documents::ensure_original(&state.pool, &state.config, uuid::Uuid::parse_str(&doc).unwrap()).await.unwrap();
+    server::documents::ensure_original(&state.pool, &state.cfg(), uuid::Uuid::parse_str(&doc).unwrap()).await.unwrap();
 
     // SharePoint indisponible : la garde est conservée, l'archive attend.
     mock.lock().unwrap().upload_failures = 1;
@@ -238,7 +238,7 @@ async fn r13_archive_sharepoint_reprise_apres_panne(pool: PgPool) {
     let uploads = mock.lock().unwrap().uploads.clone();
     assert!(uploads[0].0.starts_with("Celluloplast/dossiers/"), "{uploads:?}");
     // La copie locale est conservée.
-    assert!(state.config.data_dir.join(&path).exists());
+    assert!(state.cfg().data_dir.join(&path).exists());
     // Le statut « signé » exige toujours un scan : rien de présumé.
     let status: String = sqlx::query_scalar("SELECT status FROM documents").fetch_one(app.pool()).await.unwrap();
     assert_eq!(status, "genere");

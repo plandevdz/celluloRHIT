@@ -219,8 +219,11 @@ pub async fn apply_need(
     let mut task_created = false;
     if let Some(spec) = task_for_need(need) {
         let created: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO tasks (case_id, need_id, gen_key, role, title, due_date)
-             VALUES ($1, $2, $3, $4, $5, $6)
+            "INSERT INTO tasks (case_id, need_id, gen_key, role, title, due_date, instructions, display_order)
+             SELECT $1, $2, $3, $4, coalesce(m.title, $5),
+                    CASE WHEN m.delay_days IS NOT NULL AND $6::date IS NOT NULL THEN $6::date + m.delay_days ELSE $6::date END,
+                    m.instructions, coalesce(m.display_order, 100)
+               FROM (SELECT 1) one LEFT JOIN task_templates m ON m.task_key = $3
              ON CONFLICT (case_id, gen_key) DO UPDATE
                 SET status = 'a_faire', owner_id = NULL, blocked_reason = NULL, claimed_at = NULL,
                     version = tasks.version + 1, updated_at = now()
@@ -314,9 +317,13 @@ pub async fn add_training(
     };
     let spec = task_for_training(&t.catalog_id.to_string(), &name);
     sqlx::query(
-        "INSERT INTO tasks (case_id, training_session_id, gen_key, role, title, due_date, owner_id, status, claimed_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, CASE WHEN $7::uuid IS NULL THEN 'a_faire' ELSE 'en_cours' END,
-                 CASE WHEN $7::uuid IS NULL THEN NULL ELSE now() END)
+        "INSERT INTO tasks (case_id, training_session_id, gen_key, role, title, due_date, owner_id, status, claimed_at,
+                            instructions, display_order)
+         SELECT $1, $2, $3, $4, $5,
+                CASE WHEN m.delay_days IS NOT NULL AND $6::date IS NOT NULL THEN $6::date + m.delay_days ELSE $6::date END,
+                $7, CASE WHEN $7::uuid IS NULL THEN 'a_faire' ELSE 'en_cours' END,
+                CASE WHEN $7::uuid IS NULL THEN NULL ELSE now() END, m.instructions, coalesce(m.display_order, 100)
+           FROM (SELECT 1) one LEFT JOIN task_templates m ON m.task_key = 'formation'
          ON CONFLICT (case_id, gen_key) DO NOTHING",
     )
     .bind(case_id)
@@ -358,7 +365,7 @@ async fn create_arrival(
     let input: ArrivalInput = serde_json::from_value(raw.clone())
         .map_err(|e| AppError::invalid("body", format!("saisie incomplète : {e}")))?;
     for n in &input.needs {
-        need_open(&state.config, n.category, n.answer)?;
+        need_open(&state.cfg(), n.category, n.answer)?;
     }
     let first_name = required("first_name", &input.first_name, "prénom")?;
     let last_name = required("last_name", &input.last_name, "nom")?;
@@ -545,7 +552,7 @@ async fn create_arrival(
         "employee_id": employee_id,
         "visible_to": roles,
         "teams_without_recipient": without_recipient,
-        "mail_mode": state.config.mail_mode.as_str(),
+        "mail_mode": state.cfg().mail_mode.as_str(),
         "tasks_created": tasks_created,
     });
     idempotency::finish(&mut tx, user.id, &key, StatusCode::CREATED, &response).await?;
@@ -742,8 +749,8 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
                     'resolution', t.resolution, 'resolution_evidence', t.resolution_evidence,
                     'training_session_id', t.training_session_id, 'exit_control_id', t.exit_control_id,
                     'transfer_delta_id', t.transfer_delta_id, 'not_before', t.not_before, 'due_at', t.due_at,
-                    'escalated_at', t.escalated_at)
-                    ORDER BY t.role, t.created_at), '[]')
+                    'escalated_at', t.escalated_at, 'instructions', t.instructions, 'display_order', t.display_order)
+                    ORDER BY t.role, t.display_order, t.created_at), '[]')
            FROM tasks t LEFT JOIN users o ON o.id = t.owner_id LEFT JOIN case_needs n ON n.id = t.need_id
           WHERE t.case_id = $1 AND ($2 OR t.role = ANY($3) OR t.owner_id = $4)",
     )
@@ -847,13 +854,13 @@ async fn case_detail(State(state): State<AppState>, user: CurrentUser, Path(refe
         } else {
             vec!["compte", "licence", "bien", "donnees", "autre"]
         };
-        crate::routes::departures::case_json(&mut conn, c.id, hr, &kinds, state.config.escalation_minutes).await?
+        crate::routes::departures::case_json(&mut conn, c.id, hr, &kinds, state.cfg().escalation_minutes).await?
     } else {
         Value::Null
     };
     Ok(Json(json!({
         "scope": if hr { "complet" } else { "equipe" },
-        "mail_mode": state.config.mail_mode.as_str(),
+        "mail_mode": state.cfg().mail_mode.as_str(),
         "case": c,
         "transfer": transfer,
         "departure": departure,
@@ -888,7 +895,7 @@ async fn update_needs(
 ) -> AppResult<Json<Value>> {
     user.require(domain::roles::HR_MANAGERS)?;
     for n in &input.needs {
-        need_open(&state.config, n.category, n.answer)?;
+        need_open(&state.cfg(), n.category, n.answer)?;
     }
     let mut tx = state.pool.begin().await?;
     let row: Option<(String, String, i32, Uuid, Option<NaiveDate>)> = sqlx::query_as(
@@ -954,7 +961,7 @@ async fn update_needs(
         .await?;
     }
     tx.commit().await?;
-    Ok(Json(json!({ "version": version + 1, "visible_to": impacted, "mail_mode": state.config.mail_mode.as_str() })))
+    Ok(Json(json!({ "version": version + 1, "visible_to": impacted, "mail_mode": state.cfg().mail_mode.as_str() })))
 }
 
 // ------------------------------------------------------------------ M04 demande ponctuelle
@@ -984,7 +991,7 @@ async fn create_request(
     user.require(domain::roles::HR_MANAGERS)?;
     let input: RequestInput =
         serde_json::from_value(raw.clone()).map_err(|e| AppError::invalid("body", format!("saisie incomplète : {e}")))?;
-    need_open(&state.config, input.category, NeedAnswer::Oui)?;
+    need_open(&state.cfg(), input.category, NeedAnswer::Oui)?;
     let key = idempotency::key_from(&headers)?;
     let endpoint = format!("POST /employees/{employee_id}/requests");
     let mut tx = state.pool.begin().await?;
@@ -1091,7 +1098,7 @@ async fn create_request(
     let without_recipient = audit::roles_without_recipient(&mut tx, &[role]).await?;
     let response = json!({
         "case_id": case_id, "reference": reference, "visible_to": [role],
-        "teams_without_recipient": without_recipient, "mail_mode": state.config.mail_mode.as_str(),
+        "teams_without_recipient": without_recipient, "mail_mode": state.cfg().mail_mode.as_str(),
     });
     if let Some(k) = &key {
         idempotency::finish(&mut tx, user.id, k, StatusCode::CREATED, &response).await?;

@@ -6,6 +6,10 @@ Tout a été vérifié sur une **instance isolée**, avec des données fictives 
 
 La fiche à suivre soi-même est dans [recette-pilote.md](recette-pilote.md).
 
+## 0. Précision du 16/11/2026 : l'ancienne application n'a jamais été en production
+
+L'application Power Apps n'a servi qu'au développement et aux essais. Ses listes SharePoint servent seulement de **données de départ** (wilayas, personnel, matériel IT, profils, catalogue de formations, utilisateurs), importées par l'ADMIN (Administration → Import des listes), puis complétées par chaque équipe dans l'application (filtre « À compléter » du Personnel et du Parc IT). Il n'y a donc **aucun historique à préserver** : les hypothèses H1 à H3 de la correspondance et la règle ci-dessous sur les dossiers engagés dans Power Apps sont sans objet. La nouvelle application ne stocke rien dans SharePoint (archivage SharePoint désactivé).
+
 ## 1. Règle du pilote : seules les nouvelles opérations
 
 Décision de Celluloplast, **valable pour le pilote seulement**. Elle ne valide pas l'abandon des liens historiques, que le cahier T08 contredit (voir [correspondance-sharepoint.md](correspondance-sharepoint.md), hypothèse H1).
@@ -92,8 +96,6 @@ Une demande d'arrivée avec un profil qui prévoit un véhicule :
 
 | Limite | Exemple concret |
 |---|---|
-| Wilayas cibles d'une mutation non livrées (module fermé) | — pendant le pilote |
-| Modèles de tâches non paramétrables | La Formation ne peut pas joindre de consignes standard à une session |
 | Un compte « Manager » refusé compte encore parmi les rejets de la reprise | L'ADMIN voit un « rejet » voulu |
 | Le profil de poste peut toujours cocher « Véhicule » | Sans effet pendant le pilote : la suggestion est écartée à l'annonce, avec un avertissement |
 | Le lien SharePoint n'est pas vérifié en ligne (le document peut avoir été déplacé) | L'IT clique sur « ouvrir l'ancien document » et tombe sur une page introuvable : il cherche alors dans SharePoint |
@@ -102,4 +104,16 @@ Une demande d'arrivée avec un profil qui prévoit un véhicule :
 ## 5. Décision restant à votre main
 
 - **Date de démarrage du pilote** et site retenu.
-- Sur l'historique (H1, H2, H3 de la correspondance), aucune autre décision n'est nécessaire pour le pilote : la règle du §1 suffit. La question reste ouverte pour la bascule générale.
+- L'historique (H1, H2, H3 de la correspondance) est sans objet : l'ancienne application n'a jamais été en production (§0).
+
+## 6. Livré le 16/11/2026 (après le premier essai sur la VM)
+
+| Besoin | Où |
+|---|---|
+| Listes incomplètes importables | Import des listes : fiche sans site → « À préciser », site inconnu créé ; MaterielIT, Personnel, LignesMobiles, Affectations, profils, catalogue, wilayas, utilisateurs importés en entier sur l'export réel (base locale jetable, supprimée après l'essai) |
+| Chaque équipe corrige ses listes | RH : poste, site, département, contrat… (« Informations RH »), profils et wilayas (menu « Profils et wilayas ») ; IT : actifs, site en lot, accessoires, SIM, lignes ; Formation : catalogue ; filtre « À compléter » |
+| Réglages sans .env | Administration → Paramètres (modules, Exchange, échéances) |
+| Sauvegarde chiffrée | Administration → Sauvegardes (clé publique, heure, téléchargement) |
+| Modèles de tâches | Administration → Modèles de tâches (consignes affichées dans Mon travail) |
+| Ouvrir le scan signé | Bouton sur chaque décharge signée |
+| Wilayas cibles d'une mutation | Formulaire de mutation, appliquées à la date d'effet (module fermé pendant le pilote) |

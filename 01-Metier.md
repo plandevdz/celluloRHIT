@@ -92,3 +92,10 @@ La correspondance des 184 champs de l'ancienne application est tenue dans `docs/
   - Avec une référence fiable, l'application l'affiche aux RH, ADMIN et IT.
   - Sinon, elle indique « Remise reprise de SharePoint — justificatif à rechercher dans l'ancien système ».
   - Jamais « signé » sans preuve identifiée.
+
+## Données de départ (précision du 16/11/2026)
+
+- L'ancienne application (Power Apps et SharePoint) n'a jamais été en production : aucun historique à reprendre.
+- Ses listes servent de données de départ, importées par l'ADMIN ; une liste incomplète est acceptée (site absent → « À préciser », site inconnu créé), puis chaque équipe complète ses fiches dans l'application : le RH le personnel, les profils et les wilayas ; l'IT le matériel, les accessoires, les SIM et les lignes ; la Formation le catalogue.
+- Le RH corrige directement le poste, le site et le département d'une fiche (tracé) ; la mutation reste le chemin d'un changement préparé et daté.
+- L'ADMIN règle dans l'interface les modules, l'envoi Exchange, les échéances, la sauvegarde chiffrée et les modèles de tâches.

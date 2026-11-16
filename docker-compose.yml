@@ -60,8 +60,11 @@ services:
       # traitements arrêtés). Non défini = « pilote » ; vide = tout ouvert.
       MODULES_DESACTIVES: ${MODULES_DESACTIVES-pilote}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
+      CADDY_DATA_DIR: /caddy
     volumes:
       - documents:/var/lib/celluloplast
+      # Sauvegardes chiffrées (Administration → Sauvegardes), téléchargeables.
+      - backups:/var/lib/celluloplast-sauvegardes
       # Certificats et clés Microsoft Graph (hors dépôt, chmod 600, uid 10001).
       - ./secrets:/run/celluloplast:ro
     depends_on:
@@ -77,6 +80,9 @@ services:
     environment: *app_env
     volumes:
       - documents:/var/lib/celluloplast
+      - backups:/var/lib/celluloplast-sauvegardes
+      # Autorité de certification HTTPS : jointe aux sauvegardes si lisible.
+      - caddy_data:/caddy:ro
       # Certificats et clés Microsoft Graph (hors dépôt, chmod 600, uid 10001).
       - ./secrets:/run/celluloplast:ro
     depends_on:
@@ -106,6 +112,7 @@ services:
 volumes:
   pgdata:
   documents:
+  backups:
   caddy_data:
   caddy_config:
 

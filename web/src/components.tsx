@@ -92,6 +92,13 @@ const tone: Record<string, string> = {
   ajouter: "info",
   reprendre: "warn",
   verifier: "warn",
+  reussie: "ok",
+  demande: "info",
+  ok: "ok",
+  info: "info",
+  warn: "warn",
+  danger: "danger",
+  muted: "muted",
 };
 
 /** Pastille d'état : toujours un texte, la couleur n'est qu'un renfort. */

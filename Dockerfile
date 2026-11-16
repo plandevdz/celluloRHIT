@@ -16,22 +16,24 @@ COPY crates ./crates
 COPY migrations ./migrations
 RUN cargo build --release --locked -p server
 
-# 3. Exécution : Debian minimale, utilisateur non-root, police Unicode pour les PDF
+# 3. Exécution : Debian minimale, utilisateur non-root, police Unicode pour les
+#    PDF, gpg et pg_dump (PostgreSQL 17) pour les sauvegardes chiffrées.
 FROM debian:trixie-slim
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates fonts-dejavu-core \
+ && apt-get install -y --no-install-recommends ca-certificates fonts-dejavu-core gnupg postgresql-client \
  && rm -rf /var/lib/apt/lists/* \
  && useradd --system --uid 10001 --home-dir /app --shell /usr/sbin/nologin celluloplast \
- && mkdir -p /var/lib/celluloplast \
- && chown celluloplast /var/lib/celluloplast
+ && mkdir -p /var/lib/celluloplast /var/lib/celluloplast-sauvegardes \
+ && chown celluloplast /var/lib/celluloplast /var/lib/celluloplast-sauvegardes
 COPY --from=server /src/target/release/celluloplast /usr/local/bin/celluloplast
 COPY --from=web /web/dist /app/web
 ENV WEB_DIR=/app/web \
     DATA_DIR=/var/lib/celluloplast \
+    BACKUP_DIR=/var/lib/celluloplast-sauvegardes \
     BIND_ADDR=0.0.0.0:8080 \
     LOG_FORMAT=json \
     TZ=Africa/Algiers
 USER celluloplast
-VOLUME ["/var/lib/celluloplast"]
+VOLUME ["/var/lib/celluloplast", "/var/lib/celluloplast-sauvegardes"]
 EXPOSE 8080
 CMD ["celluloplast", "serve"]

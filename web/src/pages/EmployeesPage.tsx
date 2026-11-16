@@ -16,7 +16,7 @@ export default function EmployeesPage() {
   if (params.get("q")) query.set("q", params.get("q")!);
   if (status) query.set("status", status);
   // Filtres conservés dans l'URL (favori, retour arrière).
-  for (const [k, api_k] of [["site", "site_id"], ["departement", "department"], ["profil", "profile_id"], ["wilaya", "wilaya_id"]]) {
+  for (const [k, api_k] of [["site", "site_id"], ["departement", "department"], ["profil", "profile_id"], ["wilaya", "wilaya_id"], ["incomplet", "incomplet"]]) {
     if (params.get(k)) query.set(api_k, params.get(k)!);
   }
   const sites = useLoad(() => api<any[]>("/sites"), []);
@@ -124,6 +124,13 @@ export default function EmployeesPage() {
             ))}
           </select>
         </label>
+        <label className="field">
+          <span className="field-label">Fiches</span>
+          <select value={params.get("incomplet") ?? ""} onChange={(e) => setFilter("incomplet", e.target.value)}>
+            <option value="">Toutes</option>
+            <option value="true">À compléter</option>
+          </select>
+        </label>
         <button className="btn" type="submit">
           Rechercher
         </button>
@@ -172,7 +179,14 @@ export default function EmployeesPage() {
                       <Badge status={displayStatus(e)} label={employeeStatusLabel[displayStatus(e)]} />
                       {e.status === "a_venir" && <div className="small muted">le {fmtDate(e.planned_arrival)}</div>}
                     </td>
-                    <td className="num">{e.open_cases}</td>
+                    <td className="num">
+                      {e.open_cases}
+                      {e.missing?.length > 0 && (
+                        <div className="small" title="Champs à compléter">
+                          <span className="tag">à compléter : {e.missing.join(", ")}</span>
+                        </div>
+                      )}
+                    </td>
                   </tr>
                 ))}
               </tbody>

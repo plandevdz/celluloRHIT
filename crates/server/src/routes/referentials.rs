@@ -43,7 +43,7 @@ struct WilayaInput {
 }
 
 async fn create_wilaya(State(state): State<AppState>, user: CurrentUser, Json(i): Json<WilayaInput>) -> AppResult<Json<Value>> {
-    user.require(&[Role::Admin])?;
+    user.require(domain::roles::HR_MANAGERS)?;
     let name = domain::text::clean(&i.name).ok_or_else(|| AppError::invalid("name", "nom obligatoire"))?;
     let mut tx = state.pool.begin().await?;
     let id: Uuid = sqlx::query_scalar("INSERT INTO wilayas (code, name, region) VALUES ($1, $2, $3) RETURNING id")
@@ -58,7 +58,7 @@ async fn create_wilaya(State(state): State<AppState>, user: CurrentUser, Json(i)
 }
 
 async fn update_wilaya(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<WilayaInput>) -> AppResult<Json<Value>> {
-    user.require(&[Role::Admin])?;
+    user.require(domain::roles::HR_MANAGERS)?;
     let name = domain::text::clean(&i.name).ok_or_else(|| AppError::invalid("name", "nom obligatoire"))?;
     let mut tx = state.pool.begin().await?;
     let n = sqlx::query("UPDATE wilayas SET code = $2, name = $3, region = $4, active = coalesce($5, active) WHERE id = $1")

@@ -7,6 +7,7 @@ pub mod employees;
 pub mod imports;
 pub mod inventory;
 pub mod movements;
+pub mod parametres;
 pub mod referentials;
 pub mod reports;
 pub mod reprise;
@@ -52,9 +53,9 @@ async fn health(State(state): State<AppState>) -> Response {
         Json(json!({
             "status": if db { "ok" } else { "base indisponible" },
             "version": crate::VERSION,
-            "mail_mode": state.config.mail_mode.as_str(),
-            "archive_mode": state.config.archive_mode.as_str(),
-            "modules_desactives": state.config.disabled_modules.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
+            "mail_mode": state.cfg().mail_mode.as_str(),
+            "archive_mode": state.cfg().archive_mode.as_str(),
+            "modules_desactives": state.cfg().disabled_modules.iter().map(|m| m.as_str()).collect::<Vec<_>>(),
         })),
     )
         .into_response()
@@ -88,7 +89,7 @@ pub fn module_of(path: &str) -> Option<Module> {
 /// directs, anciens favoris, appels manuels).
 async fn module_guard(State(state): State<AppState>, req: Request, next: Next) -> Response {
     if let Some(m) = module_of(req.uri().path()) {
-        if !state.config.module_on(m) {
+        if !state.cfg().module_on(m) {
             return (
                 StatusCode::NOT_FOUND,
                 Json(json!({
@@ -111,14 +112,15 @@ pub fn api_router(state: &AppState) -> Router<AppState> {
         .route("/health", get(health))
         .merge(auth::routes())
         .merge(admin::routes())
+        .merge(parametres::routes())
         .merge(employees::routes())
         .merge(cases::routes())
         .merge(tasks::routes())
         .merge(trainings::routes())
         .merge(assets::routes())
-        .merge(movements::routes(state.config.max_upload_bytes))
-        .merge(imports::routes(state.config.max_upload_bytes))
-        .merge(reprise::routes(state.config.max_upload_bytes))
+        .merge(movements::routes(state.cfg().max_upload_bytes))
+        .merge(imports::routes(state.cfg().max_upload_bytes))
+        .merge(reprise::routes(state.cfg().max_upload_bytes))
         .merge(vehicles::routes())
         .merge(referentials::routes())
         .merge(software::routes())

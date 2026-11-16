@@ -200,7 +200,7 @@ La **reprise en production** sur une nouvelle machine (projet `celluloplast`, `.
 - chiffrement et déchiffrement par `backup.sh` : **testés** avec des secrets fictifs et un faux `docker` (`deploy/tests/test-backup.sh`, 21 contrôles réussis) ;
 - logique de `restore-isole.sh` : **testée** avec un faux `docker` (`deploy/tests/test-restore.sh`, 22 contrôles réussis) ;
 - restauration PostgreSQL + documents : **exécutée et réussie** hors Docker (pg_dump/pg_restore vers une base neuve, dossier de documents neuf ; dossier, rôles et empreintes PDF et scan identiques ; voir 05-Recette.md, « RP ») ;
-- **recette complète sur une VM avec un vrai Docker** (`backup.sh` puis `restore-isole.sh` ; comparaison du dossier, des rôles, des empreintes PDF/scan et du certificat racine Caddy avant/après) : **NON EXÉCUTÉE**. Docker n'est pas utilisable sur le poste de développement, et la production est exclue. Procédure prévue à Chéraga, sur deux VM de test : [recette-cheraga.md](recette-cheraga.md) (à exécuter sur site).
+- **recette complète sur une VM avec un vrai Docker** (`backup.sh` puis `restore-isole.sh` ; comparaison du dossier, des rôles, des empreintes PDF/scan et du certificat racine Caddy avant/après) : **NON EXÉCUTÉE**. Docker n'est pas utilisable sur le poste de développement, et la production est exclue. À faire une fois sur une machine de test, avec une sauvegarde produite par Administration → Sauvegardes ou par `backup.sh`.
 
 ## Démonstration (données fictives uniquement)
 
@@ -247,6 +247,26 @@ sudo docker compose logs app | grep -i -E "migr|démarrée|error"
 
 Le `.env` existant reste valable : les nouvelles variables ont des valeurs par défaut (voir `.env.example`). Les fiches et dossiers existants ne reçoivent aucune valeur rétroactive : profil, contrat, wilayas et ligne principale restent vides (« — ») jusqu'à saisie ou reprise. Les classeurs Excel exportés avant cette version se réimportent tels quels. Retour arrière : comme pour la 0002, restaurer la sauvegarde prise juste avant.
 
+## Administration depuis l'interface (sans éditer .env)
+
+Depuis la migration `0009`, l'ADMIN règle lui-même, dans **Administration**, ce qui demandait auparavant d'éditer `.env` et de redémarrer :
+
+| Onglet | Réglage | Remarque |
+|---|---|---|
+| Paramètres | Modules ouverts | Effet immédiat sur l'API ; les utilisateurs rechargent la page |
+| Paramètres | Avis par Exchange : certificat **généré sur le serveur** (seul le `.crt` public se télécharge, pour Entra), locataire, application, boîte, domaines autorisés, mail de test, activation | Voir « Raccorder Exchange Online » ci-dessous |
+| Paramètres | Échéances et relances | — |
+| Sauvegardes | Clé publique GnuPG, heure quotidienne, nombre gardé ; « Sauvegarder maintenant » ; téléchargement des fichiers chiffrés | Voir « Sauvegarde depuis l'interface » |
+| Modèles de tâches | Libellé, consignes, échéance (jours par rapport à l'arrivée), ordre | S'applique aux tâches créées ensuite |
+| Sites et locaux | Créer, renommer, fermer | Un site n'est jamais supprimé |
+| Import des listes | Données de départ (listes de l'ancienne application, CSV ou Excel) | Fiches sans site → site « À préciser » ; site inconnu → créé |
+
+Chaque section enregistrée dans l'interface **remplace** la valeur du fichier `.env` ; « Revenir au fichier .env » l'efface. Toute modification est tracée (journal d'audit). Les réglages sont relus par le worker à chaque cycle et par l'API toutes les 20 secondes. Aucun secret n'est stocké en base : les clés privées Graph générées sont des fichiers de `DATA_DIR/secrets` (volume des documents), jamais affichés.
+
+### Sauvegarde depuis l'interface
+
+Le worker produit chaque jour, à l'heure choisie, les quatre fichiers de `backup.sh` (`cellulo-<D>.dump.gpg`, `documents-<D>.tar.gz.gpg`, `secrets-<D>.tar.gz.gpg`, `sha256-<D>.txt`), chiffrés à la clé **publique** collée dans l'écran (la clé privée reste hors du serveur). Ils sont gardés dans le volume `celluloplast_backups` et **téléchargeables depuis l'écran** pour être rangés hors de la VM. L'archive des secrets contient les clés Graph générées et l'adresse publique ; l'autorité de certification de Caddy n'y figure que si le worker peut la lire (en pratique non : le volume de Caddy appartient à root). Sauvegardez-la une fois avec `deploy/backup.sh`, ou acceptez de réinstaller le certificat racine sur les PC après une restauration sur une autre machine. L'image contient `gpg` et `pg_dump` (PostgreSQL 17).
+
 ## Mode pilote : fonctions ouvertes
 
 `MODULES_DESACTIVES=pilote` est la valeur par défaut du `docker-compose.yml`. Il ferme les véhicules, les logiciels, les étiquettes et campagnes QR, la mutation, le départ et les états :
@@ -259,7 +279,9 @@ Ouvrir un module après sa recette : retirer son nom de la liste (ex. `MODULES_D
 
 ## Raccorder Exchange Online (envoi des avis)
 
-À faire avec l'administrateur Microsoft 365, d'abord vers une **boîte de test** :
+**Depuis l'interface (recommandé)** : Administration → Paramètres → « Avis par mail ». Générer le certificat, le télécharger et le déposer dans l'application Entra, saisir locataire, application et boîte, enregistrer en mode journal, envoyer un mail de test, puis « Activer l'envoi ». Les étapes 1 et 3 ci-dessous (boîte dédiée, droit Mail.Send limité) restent à faire avec l'administrateur Microsoft 365.
+
+**Par le fichier .env** (ancienne méthode), d'abord vers une **boîte de test** :
 
 1. Créer la boîte d'expédition dédiée (ex. `avis-parcours@…`).
 2. Créer une application Entra « Celluloplast — envoi » ; lui associer un **certificat** (pas de secret partagé). Générer la paire sur un poste d'administration :

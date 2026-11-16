@@ -20,7 +20,9 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/users/{id}/activation", post(reset_activation))
         .route("/sites", get(list_sites))
         .route("/admin/sites", post(create_site))
+        .route("/admin/sites/{id}", patch(update_site))
         .route("/admin/sites/{id}/locations", post(create_location))
+        .route("/admin/locations/{id}", patch(update_location))
         .route("/admin/notifications", get(list_notifications))
         .route("/admin/deliveries/{id}/retry", post(retry_delivery))
         .route("/admin/archive", get(archive_status))
@@ -66,7 +68,7 @@ struct CreateUser {
 }
 
 fn activation_link(state: &AppState, token: &str) -> String {
-    format!("{}/activation?token={}", state.config.public_url.trim_end_matches('/'), token)
+    format!("{}/activation?token={}", state.cfg().public_url.trim_end_matches('/'), token)
 }
 
 /// Crée un compte nominatif. Le lien d'activation à usage unique est rendu
@@ -286,6 +288,71 @@ async fn create_site(State(state): State<AppState>, user: CurrentUser, Json(inpu
 }
 
 #[derive(Deserialize)]
+struct UpdateSite {
+    name: Option<String>,
+    code: Option<String>,
+    active: Option<bool>,
+}
+
+/// Renommer ou fermer un site (jamais supprimé : des fiches y sont rattachées).
+async fn update_site(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<UpdateSite>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin])?;
+    let name = match &i.name {
+        Some(n) => Some(domain::text::clean(n).ok_or_else(|| AppError::invalid("name", "nom obligatoire"))?),
+        None => None,
+    };
+    let code = match &i.code {
+        Some(c) => Some(domain::text::clean(c).ok_or_else(|| AppError::invalid("code", "code obligatoire"))?.to_uppercase()),
+        None => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query(
+        "UPDATE sites SET name = coalesce($2, name), code = coalesce($3, code), active = coalesce($4, active), updated_at = now() WHERE id = $1",
+    )
+    .bind(id)
+    .bind(&name)
+    .bind(&code)
+    .bind(i.active)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("site"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "site_modifie", entity: "site", entity_id: Some(id), data: Some(json!({ "nom": name, "code": code, "actif": i.active })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
+struct UpdateLocation {
+    name: Option<String>,
+    active: Option<bool>,
+}
+
+async fn update_location(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>, Json(i): Json<UpdateLocation>) -> AppResult<Json<Value>> {
+    user.require(&[Role::Admin, Role::It])?;
+    let name = match &i.name {
+        Some(n) => Some(domain::text::clean(n).ok_or_else(|| AppError::invalid("name", "nom obligatoire"))?),
+        None => None,
+    };
+    let mut tx = state.pool.begin().await?;
+    let n = sqlx::query("UPDATE locations SET name = coalesce($2, name), active = coalesce($3, active) WHERE id = $1")
+        .bind(id)
+        .bind(&name)
+        .bind(i.active)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    if n == 0 {
+        return Err(AppError::not_found("local"));
+    }
+    audit::record(&mut tx, &user, Audit { action: "local_modifie", entity: "location", entity_id: Some(id), data: Some(json!({ "nom": name, "actif": i.active })), ..Default::default() }).await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "ok": true })))
+}
+
+#[derive(Deserialize)]
 struct CreateLocation {
     name: String,
 }
@@ -433,7 +500,7 @@ async fn archive_status(State(state): State<AppState>, user: CurrentUser) -> App
                         FROM (SELECT * FROM document_versions WHERE archive_status IN ('en_attente', 'echec') ORDER BY created_at DESC LIMIT 100) v
                         JOIN documents d ON d.id = v.document_id JOIN movements m ON m.id = d.movement_id))",
     )
-    .bind(state.config.archive_mode.as_str())
+    .bind(state.cfg().archive_mode.as_str())
     .fetch_one(&state.pool)
     .await?;
     Ok(Json(v))
@@ -441,7 +508,7 @@ async fn archive_status(State(state): State<AppState>, user: CurrentUser) -> App
 
 async fn retry_archive(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Value>> {
     user.require(&[Role::Admin])?;
-    if state.config.archive_mode == crate::config::ArchiveMode::Desactive {
+    if state.cfg().archive_mode == crate::config::ArchiveMode::Desactive {
         return Err(AppError::conflict("archivage SharePoint désactivé sur ce serveur"));
     }
     let mut tx = state.pool.begin().await?;
@@ -461,7 +528,7 @@ async fn retry_archive(State(state): State<AppState>, user: CurrentUser, Path(id
 /// Paramètres d'exploitation visibles (sans aucun secret).
 async fn settings(State(state): State<AppState>, user: CurrentUser) -> AppResult<Json<Value>> {
     user.require(&[Role::Admin])?;
-    let c = &state.config;
+    let c = state.cfg();
     Ok(Json(json!({
         "mail_mode": c.mail_mode.as_str(),
         "mail_sender": c.mail_sender,

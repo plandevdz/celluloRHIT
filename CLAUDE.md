@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 « Celluloplast | Parcours salarié » : application **web** (navigateur, aucun installateur) qui remplace Power Apps / Power Automate pour les arrivées, le parc IT, les formations, les mutations et les départs. Serveur Rust + PostgreSQL + interface React, déployés en **Docker** sur un serveur Debian de l'entreprise et joints par leur IP en HTTPS. Tout (code métier, UI, messages d'erreur, commits) est **en français** ; les noms arabes et les accents doivent être préservés partout.
 
-Le cahier des charges fait foi et se lit dans cet ordre : `01-Metier.md` → `03-UI-UX.md` → `04-Donnees.md` → `02-Technique.md` → `05-Recette.md` (scénarios R01–R14). Le `README.md` porte la préparation du serveur et l'ordre des livraisons. `deploy/README.md` est le guide d'installation et la liste de ce qui est livré ou non. `modeles/` contient les gabarits papier des décharges, que reproduit `crates/server/src/pdf.rs`. `docs/correspondance-sharepoint.md` donne la destination des 184 champs de l'ancienne application (à tenir à jour si un champ change de place) ; `docs/pilote.md` le périmètre du pilote, les écarts et les décisions en attente ; `docs/recette-pilote.md` la fiche de recette.
+Le cahier des charges fait foi et se lit dans cet ordre : `01-Metier.md` → `03-UI-UX.md` → `04-Donnees.md` → `02-Technique.md` → `05-Recette.md` (scénarios R01–R14). Le `README.md` porte la préparation du serveur et l'ordre des livraisons. `deploy/README.md` est le guide d'installation et la liste de ce qui est livré ou non. `modeles/` contient les gabarits papier des décharges, que reproduit `crates/server/src/pdf.rs`. `docs/correspondance-sharepoint.md` donne la destination des 184 champs de l'ancienne application (à tenir à jour si un champ change de place) ; `docs/pilote.md` le périmètre du pilote, les écarts et les décisions en attente (l'ancienne application Power Apps n'a jamais été en production : ses listes ne sont que des données de départ) ; `docs/recette-pilote.md` la fiche de recette.
 
 ## Commandes
 
@@ -23,6 +23,7 @@ cargo test -p server --test lot2_excel       # import/export Excel
 cargo test -p server --test livraison1       # 9 scénarios de la 1re livraison (fiche, profils, équipements, Excel v2)
 cargo test -p server --test arbitrages       # règles provisoires du 16/11 (intervenant sans compte, cases anciennes, salarié déjà présent)
 cargo test -p server --test pilote           # mode pilote : modules fermés, besoin véhicule, anciens avis, preuves anciennes
+cargo test -p server --test administration   # réglages de l'interface, certificat, modèles de tâches, listes par équipe, sauvegarde (GPG_BIN, PG_DUMP_BIN ≥ 17 ; ignoré sans ces outils)
 cargo test -p server --test mutation_depart  # R09, R10 (aussi : vehicules, logiciels, inventaire, graph, reprise)
 cargo run -p server -- serve                 # API + web sur :8080 (migrations au démarrage)
 cargo run -p server -- worker                # avis + PDF en attente (processus séparé)
@@ -35,7 +36,7 @@ cd web && npm run build      # tsc --noEmit + build dans web/dist (servi par l'A
 docker compose up -d --build # déploiement complet (nécessite .env, voir .env.example)
 ```
 
-`MODULES_DESACTIVES` (`pilote` ou liste : vehicules, logiciels, inventaire, mutation, depart, etats) ferme des modules : menus masqués (`useAuth().on`), routes refusées (`routes::module_of`), traitements du worker arrêtés ; toute nouvelle route d'un module facultatif doit être ajoutée à `module_of`. En local, `serve` a besoin de `WEB_DIR=web/dist`, `COOKIE_SECURE=false` et `PUBLIC_URL=http://localhost:8080` ; sous Windows, les polices PDF sont lues dans `C:/Windows/Fonts/arial*.ttf`. Toutes les variables sont dans `crates/server/src/config.rs`.
+`MODULES_DESACTIVES` (`pilote` ou liste : vehicules, logiciels, inventaire, mutation, depart, etats) ferme des modules : menus masqués (`useAuth().on`), routes refusées (`routes::module_of`), traitements du worker arrêtés ; toute nouvelle route d'un module facultatif doit être ajoutée à `module_of`. En local, `serve` a besoin de `WEB_DIR=web/dist`, `COOKIE_SECURE=false` et `PUBLIC_URL=http://localhost:8080` ; sous Windows, les polices PDF sont lues dans `C:/Windows/Fonts/arial*.ttf`. Toutes les variables sont dans `crates/server/src/config.rs`. Depuis la migration 0009, l'ADMIN peut remplacer dans l'interface les sections modules, mail, archive, échéances et sauvegarde (`runtime_settings`, `settings.rs`) : le code lit toujours la configuration **effective** par `state.cfg()` (jamais un champ figé au démarrage), et les clients Graph par `state.mailer()` / `state.archiver()`. Sauvegarde intégrée : `backup.rs` (worker, gpg + pg_dump, `BACKUP_DIR`, `GPG_BIN`, `PG_DUMP_BIN`, `CADDY_DATA_DIR`) ; certificats Graph générés sur le serveur : `certs.rs` (`DATA_DIR/secrets`).
 
 ## Architecture
 
