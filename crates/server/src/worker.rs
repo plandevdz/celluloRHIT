@@ -119,6 +119,45 @@ pub async fn expand_outbox(state: &AppState) -> anyhow::Result<()> {
 }
 
 pub async fn deliver(state: &AppState) -> anyhow::Result<()> {
+    match state.config.mail_mode {
+        // Période en mode journal (tests, pilote) : tout avis créé pendant
+        // cette période est un avis de test. Une activation antérieure de
+        // l'envoi est oubliée : la prochaine sera datée à nouveau.
+        MailMode::Journal => {
+            sqlx::query(
+                "INSERT INTO app_settings (key, at) VALUES ('journal_jusqua', now())
+                 ON CONFLICT (key) DO UPDATE SET at = now(), updated_at = now()",
+            )
+            .execute(&state.pool)
+            .await?;
+            sqlx::query("DELETE FROM app_settings WHERE key = 'envoi_depuis'").execute(&state.pool).await?;
+        }
+        // Activation de l'envoi après une période en mode journal : son
+        // instant est fixé au premier passage, et aucun avis créé avant ne
+        // part, même s'il était encore en attente (pas de rattrapage).
+        MailMode::Graph => {
+            sqlx::query(
+                "INSERT INTO app_settings (key, at)
+                 SELECT 'envoi_depuis', now() WHERE EXISTS (SELECT 1 FROM app_settings WHERE key = 'journal_jusqua')
+                 ON CONFLICT (key) DO NOTHING",
+            )
+            .execute(&state.pool)
+            .await?;
+            let n = sqlx::query(
+                "UPDATE deliveries d SET status = 'journalise', last_attempt_at = now(), lease_until = NULL,
+                        last_result = 'avis antérieur à l''activation de l''envoi (mode journal) : consigné, jamais envoyé'
+                   FROM outbox o, app_settings s
+                  WHERE o.id = d.outbox_id AND s.key = 'envoi_depuis'
+                    AND d.status = 'en_attente' AND o.created_at < s.at",
+            )
+            .execute(&state.pool)
+            .await?
+            .rows_affected();
+            if n > 0 {
+                tracing::warn!(avis = n, "avis antérieurs à l'activation de l'envoi : consignés, non envoyés");
+            }
+        }
+    }
     let due: Vec<(Uuid, String)> = sqlx::query_as(
         "WITH picked AS (
             SELECT id FROM deliveries
@@ -291,9 +330,16 @@ pub async fn archive_documents(state: &AppState) -> anyhow::Result<()> {
 /// Mutations à appliquer et départs à échéance. Tout repose sur l'état en
 /// base : après un redémarrage, les échéances passées sont traitées.
 pub async fn process_transitions(state: &AppState) -> anyhow::Result<()> {
+    use crate::config::Module;
     let today = documents::algiers_today();
-    crate::routes::transfers::apply_due(&state.pool, today).await?;
-    crate::routes::departures::process_due(&state.pool, today, state.config.escalation_minutes).await?;
+    // Module fermé (pilote) : aucune mutation appliquée, aucune coupure ni
+    // relance de départ déclenchée automatiquement.
+    if state.config.module_on(Module::Mutation) {
+        crate::routes::transfers::apply_due(&state.pool, today).await?;
+    }
+    if state.config.module_on(Module::Depart) {
+        crate::routes::departures::process_due(&state.pool, today, state.config.escalation_minutes).await?;
+    }
     Ok(())
 }
 
@@ -333,9 +379,14 @@ fn fr(d: Option<chrono::NaiveDate>) -> String {
 pub async fn check_deadlines(state: &AppState) -> anyhow::Result<()> {
     let today = documents::algiers_today();
     let mut conn = state.pool.acquire().await?;
-    let items = crate::routes::vehicles::deadlines_json(&mut conn, today, state.config.alert_days, state.config.alert_km)
-        .await
-        .map_err(|e| anyhow::anyhow!("échéances véhicules : {e}"))?;
+    // Module fermé (pilote) : aucune alerte d'échéance n'est émise.
+    let items = if state.config.module_on(crate::config::Module::Vehicules) {
+        crate::routes::vehicles::deadlines_json(&mut conn, today, state.config.alert_days, state.config.alert_km)
+            .await
+            .map_err(|e| anyhow::anyhow!("échéances véhicules : {e}"))?
+    } else {
+        serde_json::json!([])
+    };
     for it in items.as_array().cloned().unwrap_or_default() {
         let Some(id) = it["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) else { continue };
         let overdue = it["overdue"].as_bool().unwrap_or(false);
@@ -385,9 +436,13 @@ pub async fn check_deadlines(state: &AppState) -> anyhow::Result<()> {
         tx.commit().await?;
     }
     // Abonnements logiciels : alerte IT avant renouvellement.
-    let renewals = crate::routes::software::renewals_json(&mut conn, today, state.config.alert_days)
-        .await
-        .map_err(|e| anyhow::anyhow!("échéances logiciels : {e}"))?;
+    let renewals = if state.config.module_on(crate::config::Module::Logiciels) {
+        crate::routes::software::renewals_json(&mut conn, today, state.config.alert_days)
+            .await
+            .map_err(|e| anyhow::anyhow!("échéances logiciels : {e}"))?
+    } else {
+        serde_json::json!([])
+    };
     for it in renewals.as_array().cloned().unwrap_or_default() {
         let Some(id) = it["id"].as_str().and_then(|s| Uuid::parse_str(s).ok()) else { continue };
         let overdue = it["overdue"].as_bool().unwrap_or(false);

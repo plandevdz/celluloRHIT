@@ -613,6 +613,23 @@ struct AssignmentData {
     ended_at: Option<DateTime<Utc>>,
     condition: Option<String>,
     note: Option<String>,
+    /// Lien vérifié vers le justificatif SharePoint (https://….sharepoint.com).
+    #[serde(default)]
+    proof_url: Option<String>,
+    /// Référence identifiable du justificatif (pièce jointe de l'élément).
+    #[serde(default)]
+    proof_ref: Option<String>,
+}
+
+/// Lien de justificatif fiable : https sur un site SharePoint de l'entreprise
+/// (même règle que la contrainte en base). Tout autre lien est ignoré.
+fn sharepoint_link(url: &str) -> Option<String> {
+    let rest = url.trim().strip_prefix("https://")?;
+    let (host, path) = rest.split_once('/')?;
+    let host = host.to_lowercase();
+    let tenant = host.strip_suffix(".sharepoint.com")?;
+    (!tenant.is_empty() && tenant.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-'))
+        .then(|| format!("https://{host}/{path}"))
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -1058,9 +1075,17 @@ async fn plan_person(conn: &mut PgConnection, ctx: &Ctx, row: &Row, known: Optio
         }
     }
     if opt_bool(row, &["M365Operationnel", "M365 opérationnel"], plan, "M365Operationnel") == Some(true) {
-        d.m365_verified_at = Some(
-            opt_instant(row, &["DateActivationM365"], plan, "DateActivationM365").unwrap_or_else(Utc::now),
-        );
+        match opt_instant(row, &["DateActivationM365"], plan, "DateActivationM365") {
+            Some(at) => d.m365_verified_at = Some(at),
+            None => {
+                plan.info("M365Operationnel « Oui » sans date d'activation : « Microsoft 365 opérationnel » non activé, aucune date inventée (gardé en texte)");
+                let note = "Ancien « M365 opérationnel » : Oui (date non renseignée, à vérifier)".to_string();
+                d.import_note = Some(match d.import_note.take() {
+                    Some(n) => format!("{n} · {note}"),
+                    None => note,
+                });
+            }
+        }
     }
 
     // Identité : ancien ID, puis matricule exact ; jamais le nom seul.
@@ -1340,6 +1365,27 @@ async fn plan_assignment(conn: &mut PgConnection, row: &Row, known: Option<Uuid>
     .flatten()
     .collect();
     d.note = (!parts.is_empty()).then(|| parts.join(" — "));
+    // Justificatif resté dans SharePoint : lien vérifié, ou pièce jointe de
+    // l'élément identifiée par son ID. Jamais importé, jamais régénéré.
+    if let Some(link) = row.text(&["LienJustificatif", "Lien justificatif", "Justificatif", "LienDecharge", "Lien décharge"]) {
+        match sharepoint_link(&link) {
+            Some(u) => d.proof_url = Some(u),
+            None => plan.warn("Lien de justificatif ignoré : seule une adresse https://<site>.sharepoint.com/… est acceptée"),
+        }
+    }
+    let attached = row
+        .text(&["Attachments", "Pièces jointes", "PiecesJointes"])
+        .map(|v| ["oui", "true", "vrai", "1", "yes"].contains(&fold(&v).as_str()))
+        .unwrap_or(false);
+    if attached {
+        match row.text(&["ID"]) {
+            Some(id) => d.proof_ref = Some(format!("pièce jointe de l'élément n° {id} de la liste Affectations (SharePoint)")),
+            None => plan.warn("Pièce jointe signalée mais export sans colonne ID : justificatif non identifiable"),
+        }
+    }
+    if d.proof_url.is_none() && d.proof_ref.is_none() {
+        plan.info("Aucun justificatif identifié : « justificatif à rechercher dans l'ancien système »");
+    }
     if let (Some(a), Some(b)) = (d.started_at, d.ended_at) {
         if b < a {
             plan.err("Date de restitution antérieure à l'attribution");
@@ -2207,11 +2253,11 @@ async fn apply_row(
                 _ => return Err(AppError::invalid("objet", "objet introuvable")),
             };
             if let (true, Some(assignment)) = (update, target) {
-                complete_reprise_assignment(conn, assignment, employee, d.started_at, d.note.as_deref()).await?;
+                complete_reprise_assignment(conn, assignment, employee, d.started_at, d.note.as_deref(), (d.proof_url.as_deref(), d.proof_ref.as_deref())).await?;
                 remember(conn, list, r, assignment, None, batch).await?;
                 ("mis_a_jour", assignment)
             } else {
-                let id = reprise_assignment(conn, user, employee, item, &d.label, d.started_at, d.ended_at, d.condition.as_deref(), d.note.as_deref()).await?;
+                let id = reprise_assignment(conn, user, employee, item, &d.label, d.started_at, d.ended_at, d.condition.as_deref(), d.note.as_deref(), (d.proof_url.as_deref(), d.proof_ref.as_deref())).await?;
                 remember(conn, list, r, id, None, batch).await?;
                 ("cree", id)
             }
@@ -2385,8 +2431,8 @@ async fn apply_person(conn: &mut PgConnection, user: &CurrentUser, d: &PersonDat
     }
     if let (Some(email), Some(platform)) = (&d.email_pro, &d.email_platform) {
         sqlx::query(
-            "INSERT INTO employee_accounts (employee_id, system, platform, identifier, created_by, verified_at)
-             SELECT $1, 'email', $2, $3, $4, now()
+            "INSERT INTO employee_accounts (employee_id, system, platform, identifier, created_by, verified_at, imported)
+             SELECT $1, 'email', $2, $3, $4, NULL, true
               WHERE NOT EXISTS (SELECT 1 FROM employee_accounts WHERE system = 'email' AND lower(identifier) = lower($3) AND status <> 'coupe')",
         )
         .bind(id)
@@ -2436,6 +2482,7 @@ async fn complete_reprise_assignment(
     employee_id: Uuid,
     started_at: Option<DateTime<Utc>>,
     note: Option<&str>,
+    proof: (Option<&str>, Option<&str>),
 ) -> AppResult<()> {
     let movement: Option<Uuid> = sqlx::query_scalar(
         "SELECT m.id FROM assignments a JOIN movement_lines l ON l.id = a.handover_line_id JOIN movements m ON m.id = l.movement_id
@@ -2453,12 +2500,15 @@ async fn complete_reprise_assignment(
         .await?;
     sqlx::query(
         "UPDATE movements SET effective_at = coalesce($2, effective_at),
-                note = CASE WHEN $3::text IS NULL THEN note ELSE coalesce(note, 'Reprise SharePoint') || ' — ' || $3 END
+                note = CASE WHEN $3::text IS NULL THEN note ELSE coalesce(note, 'Reprise SharePoint') || ' — ' || $3 END,
+                legacy_proof_url = coalesce($4, legacy_proof_url), legacy_proof_ref = coalesce($5, legacy_proof_ref)
           WHERE id = $1",
     )
     .bind(movement)
     .bind(started_at)
     .bind(note)
+    .bind(proof.0)
+    .bind(proof.1)
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -2474,6 +2524,7 @@ async fn reprise_assignment(
     ended_at: Option<DateTime<Utc>>,
     condition: Option<&str>,
     note: Option<&str>,
+    proof: (Option<&str>, Option<&str>),
 ) -> AppResult<Uuid> {
     let at = started_at.unwrap_or_else(Utc::now);
     let (item_type, asset_id, sim_id) = match item {
@@ -2502,8 +2553,8 @@ async fn reprise_assignment(
     let n: i64 = sqlx::query_scalar("SELECT nextval('movement_ref')").fetch_one(&mut *conn).await?;
     let reference = domain::cases::format_movement_reference(n);
     let movement: Uuid = sqlx::query_scalar(
-        "INSERT INTO movements (reference, kind, employee_id, operator_id, effective_at, note)
-         VALUES ($1, 'reprise', $2, $3, $4, $5) RETURNING id",
+        "INSERT INTO movements (reference, kind, employee_id, operator_id, effective_at, note, legacy_proof_url, legacy_proof_ref)
+         VALUES ($1, 'reprise', $2, $3, $4, $5, $6, $7) RETURNING id",
     )
     .bind(&reference)
     .bind(employee_id)
@@ -2513,6 +2564,8 @@ async fn reprise_assignment(
         Some(n) => format!("Reprise SharePoint — {n}"),
         None => "Reprise SharePoint".to_string(),
     }))
+    .bind(proof.0)
+    .bind(proof.1)
     .fetch_one(&mut *conn)
     .await?;
     let line: Uuid = sqlx::query_scalar(
@@ -2615,7 +2668,7 @@ async fn apply_asset(conn: &mut PgConnection, user: &CurrentUser, d: &AssetData,
             .await?;
         if !held {
             let label = format!("{} ({})", d.label, d.inventory_no);
-            reprise_assignment(conn, user, holder, Item::Asset(id), &label, None, None, d.condition.as_deref(), None).await?;
+            reprise_assignment(conn, user, holder, Item::Asset(id), &label, None, None, d.condition.as_deref(), None, (None, None)).await?;
         }
     }
     Ok(id)
@@ -2681,7 +2734,7 @@ async fn apply_line(conn: &mut PgConnection, user: &CurrentUser, d: &LineData, t
             .fetch_one(&mut *conn)
             .await?;
         if !held {
-            reprise_assignment(conn, user, holder, Item::Sim(sim), &format!("Carte SIM — ligne {}", d.number), None, None, None, None).await?;
+            reprise_assignment(conn, user, holder, Item::Sim(sim), &format!("Carte SIM — ligne {}", d.number), None, None, None, None, (None, None)).await?;
         }
     }
     Ok(id)

@@ -17,7 +17,21 @@ use crate::auth::CurrentUser;
 use crate::error::{AppError, AppResult};
 use crate::idempotency::{self, Begin};
 use crate::routes::employees::{insert_employee, required, NewEmployee};
+use crate::config::{Config, Module};
 use crate::state::AppState;
+
+/// Pendant le pilote (module Véhicules fermé), un besoin véhicule ne crée
+/// aucune tâche RH : elle ne pourrait être ni traitée ni soldée et
+/// bloquerait la clôture. La demande se traite hors de l'application.
+fn need_open(config: &Config, category: NeedCategory, answer: NeedAnswer) -> AppResult<()> {
+    if category == NeedCategory::Vehicule && answer == NeedAnswer::Oui && !config.module_on(Module::Vehicules) {
+        return Err(AppError::invalid(
+            "needs",
+            "Véhicule : non géré dans l'application pendant le pilote. Laissez « à préciser » et traitez la demande hors de l'application.",
+        ));
+    }
+    Ok(())
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -343,6 +357,9 @@ async fn create_arrival(
     let key = idempotency::require_key(&headers)?;
     let input: ArrivalInput = serde_json::from_value(raw.clone())
         .map_err(|e| AppError::invalid("body", format!("saisie incomplète : {e}")))?;
+    for n in &input.needs {
+        need_open(&state.config, n.category, n.answer)?;
+    }
     let first_name = required("first_name", &input.first_name, "prénom")?;
     let last_name = required("last_name", &input.last_name, "nom")?;
     let job_title = required("job_title", &input.job_title, "poste prévu")?;
@@ -870,6 +887,9 @@ async fn update_needs(
     Json(input): Json<NeedsUpdate>,
 ) -> AppResult<Json<Value>> {
     user.require(domain::roles::HR_MANAGERS)?;
+    for n in &input.needs {
+        need_open(&state.config, n.category, n.answer)?;
+    }
     let mut tx = state.pool.begin().await?;
     let row: Option<(String, String, i32, Uuid, Option<NaiveDate>)> = sqlx::query_as(
         "SELECT reference, status, version, employee_id, coalesce(due_date, effective_date) FROM cases WHERE id = $1 FOR UPDATE",
@@ -964,6 +984,7 @@ async fn create_request(
     user.require(domain::roles::HR_MANAGERS)?;
     let input: RequestInput =
         serde_json::from_value(raw.clone()).map_err(|e| AppError::invalid("body", format!("saisie incomplète : {e}")))?;
+    need_open(&state.config, input.category, NeedAnswer::Oui)?;
     let key = idempotency::key_from(&headers)?;
     let endpoint = format!("POST /employees/{employee_id}/requests");
     let mut tx = state.pool.begin().await?;

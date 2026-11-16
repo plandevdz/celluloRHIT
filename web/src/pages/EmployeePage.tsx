@@ -2,7 +2,7 @@ import { FormEvent, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { api, ApiError, newKey } from "../api";
 import { useAuth } from "../auth";
-import { Badge, EmployeePicker, Empty, ErrorBox, Field, Loading, Modal, Notice, PageHeader, Section } from "../components";
+import { Badge, EmployeePicker, Empty, ErrorBox, Field, LegacyProof, Loading, Modal, Notice, PageHeader, Section } from "../components";
 import { useCommand, useLoad } from "../hooks";
 import {
   caseKindLabel,
@@ -24,7 +24,7 @@ import { DepartureDialog, PositionCorrectionDialog, TransferDialog } from "./Tra
 
 export default function EmployeePage() {
   const { id = "" } = useParams();
-  const { has } = useAuth();
+  const { has, on } = useAuth();
   const location = useLocation();
   const detail = useLoad(() => api<any>(`/employees/${id}`), [id]);
   const accounts = useLoad(() => (has("IT", "RH", "ADMIN") ? api<any[]>(`/employees/${id}/accounts`) : Promise.resolve([])), [id]);
@@ -74,12 +74,12 @@ export default function EmployeePage() {
                 Nouvelle demande
               </button>
             )}
-            {isHr && e.status !== "sorti" && !openMut && !openOff && (
+            {isHr && on("mutation") && e.status !== "sorti" && !openMut && !openOff && (
               <button className="btn" onClick={() => setDialog("mutation")}>
                 Mutation
               </button>
             )}
-            {isHr && e.status !== "sorti" && !openOff && (
+            {isHr && on("depart") && e.status !== "sorti" && !openOff && (
               <button className="btn" onClick={() => setDialog("depart")}>
                 Départ
               </button>
@@ -221,7 +221,7 @@ export default function EmployeePage() {
                 Départ en cours : <Link to={`/dossiers/${openOff.reference}`}>{openOff.reference}</Link>
               </Notice>
             )}
-            {isHr && e.status !== "sorti" && (
+            {isHr && on("mutation") && e.status !== "sorti" && (
               <button className="btn-link small" onClick={() => setDialog("correction")}>
                 Correction de poste datée…
               </button>
@@ -265,7 +265,12 @@ export default function EmployeePage() {
                       </td>
                       <td className="small">
                         {h.origin_reference} · {fmtDateTime(h.since)}
-                        {h.reprise_note && <div className="muted">{h.reprise_note} — sans décharge dans l'application</div>}
+                        {h.reprise_note && (
+                          <>
+                            <div className="muted">{h.reprise_note}</div>
+                            <LegacyProof url={h.legacy_proof_url} reference={h.legacy_proof_ref} />
+                          </>
+                        )}
                         {h.case_reference && (
                           <>
                             {" "}
@@ -281,7 +286,7 @@ export default function EmployeePage() {
           </Section>
           )}
 
-          {full && licenses.length > 0 && (
+          {full && on("logiciels") && licenses.length > 0 && (
             <Section title="Licences logicielles">
               <ul className="timeline">
                 {licenses.map((l: any) => (
@@ -293,7 +298,7 @@ export default function EmployeePage() {
               </ul>
             </Section>
           )}
-          {isHr && vehicles.length > 0 && (
+          {isHr && on("vehicules") && vehicles.length > 0 && (
             <Section title="Véhicule confié">
               <ul className="timeline">
                 {vehicles.map((v: any) => (
@@ -426,7 +431,13 @@ function AccountsSection({ employee, accounts, canEdit, onChange }: { employee: 
                 <td className="mono small">{a.identifier}</td>
                 <td>
                   <Badge status={a.status === "coupe" ? "annule" : a.status === "a_verifier" ? "a_verifier" : "termine"} label={accountStatusLabel[a.status]} />
-                  <div className="small muted">vérifié {fmtDateTime(a.verified_at)}</div>
+                  <div className="small muted">
+                    {a.verified_at
+                      ? `vérifié ${fmtDateTime(a.verified_at)}`
+                      : a.imported
+                        ? "Adresse reprise — vérification non renseignée"
+                        : "vérification non renseignée"}
+                  </div>
                 </td>
                 <td>
                   {canEdit && a.status !== "coupe" && (
@@ -440,7 +451,7 @@ function AccountsSection({ employee, accounts, canEdit, onChange }: { employee: 
                       }}
                     >
                       <option value="">Confirmer…</option>
-                      {a.status !== "actif" && <option value="actif">Actif (vérifié)</option>}
+                      {(a.status !== "actif" || !a.verified_at) && <option value="actif">Actif (vérifié)</option>}
                       {a.status !== "a_verifier" && <option value="a_verifier">À vérifier</option>}
                       <option value="coupe">Coupure réalisée</option>
                     </select>
@@ -492,6 +503,7 @@ function AccountsSection({ employee, accounts, canEdit, onChange }: { employee: 
 /** M04 : demande ponctuelle autonome, une seule équipe sollicitée. */
 function RequestDialog({ employee, cases, onClose }: { employee: any; cases: any[]; onClose: () => void }) {
   const navigate = useNavigate();
+  const { on } = useAuth();
   const catalog = useLoad(() => api<any[]>("/trainings/catalog"), []);
   const [f, setF] = useState({ category: "carte_visite", detail: "", due_date: "", parent_case_id: "", preference: "", catalog_id: "" });
   const [key] = useState(newKey);
@@ -527,7 +539,7 @@ function RequestDialog({ employee, cases, onClose }: { employee: any; cases: any
       >
         <Field label="Besoin" required>
           <select value={f.category} onChange={(e) => setF({ ...f, category: e.target.value })}>
-            {NEED_CATEGORIES.map((c) => (
+            {NEED_CATEGORIES.filter((c) => c !== "vehicule" || on("vehicules")).map((c) => (
               <option key={c} value={c}>
                 {needLabel[c]} — {roleLabel[needTeam[c]]}
               </option>

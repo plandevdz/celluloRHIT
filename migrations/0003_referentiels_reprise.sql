@@ -132,6 +132,15 @@ ALTER TABLE employees ADD COLUMN primary_line_id uuid REFERENCES mobile_lines(id
 -- remise réelle (aucune décharge n'est fabriquée pour le passé).
 ALTER TABLE movements DROP CONSTRAINT movements_kind_check;
 ALTER TABLE movements ADD CONSTRAINT movements_kind_check CHECK (kind IN ('remise', 'restitution', 'reprise'));
+-- Garde reprise : justificatif resté dans SharePoint. Lien vérifié
+-- (https://….sharepoint.com) ou référence identifiable (pièce jointe de
+-- l'élément n° X de la liste Affectations). Jamais de PDF régénéré.
+ALTER TABLE movements
+    ADD COLUMN legacy_proof_url  text CHECK (legacy_proof_url IS NULL OR legacy_proof_url ~ '^https://[a-z0-9-]+\.sharepoint\.com/'),
+    ADD COLUMN legacy_proof_ref  text;
+-- Compte repris de SharePoint : sans preuve de vérification, verified_at
+-- reste vide (« vérification non renseignée »), jamais la date de reprise.
+ALTER TABLE employee_accounts ADD COLUMN imported boolean NOT NULL DEFAULT false;
 
 -- ------------------------------------------------------------ reprise SharePoint
 -- Un lot par fichier exporté d'une liste ; aperçu sans écriture métier,

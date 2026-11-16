@@ -56,6 +56,9 @@ services:
       ESCALATION_MINUTES: ${ESCALATION_MINUTES:-60}
       SESSION_IDLE_MINUTES: ${SESSION_IDLE_MINUTES:-60}
       SESSION_MAX_HOURS: ${SESSION_MAX_HOURS:-10}
+      # Pilote : modules facultatifs fermés (menus masqués, routes refusées,
+      # traitements arrêtés). Non défini = « pilote » ; vide = tout ouvert.
+      MODULES_DESACTIVES: ${MODULES_DESACTIVES-pilote}
       RUST_LOG: ${RUST_LOG:-info,sqlx=warn}
     volumes:
       - documents:/var/lib/celluloplast

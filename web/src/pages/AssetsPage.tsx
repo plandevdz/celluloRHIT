@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { api, ApiError } from "../api";
 import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Section } from "../components";
+import { useAuth } from "../auth";
 import { useCommand, useLoad } from "../hooks";
 import { assetConditionLabel, assetKindLabel, assetStatusLabel } from "../labels";
 import { InventoriesTab, LabelsDialog, LinesSection, SoftwareTab } from "./ParcExtras";
@@ -10,18 +11,21 @@ const TABS = [
   { id: "actifs", label: "Actifs" },
   { id: "accessoires", label: "Accessoires" },
   { id: "sim", label: "SIM et lignes" },
-  { id: "logiciels", label: "Logiciels et sièges" },
-  { id: "inventaires", label: "Inventaires QR" },
+  { id: "logiciels", label: "Logiciels et sièges", module: "logiciels" },
+  { id: "inventaires", label: "Inventaires QR", module: "inventaire" },
 ];
 
 export default function AssetsPage() {
   const [params, setParams] = useSearchParams();
-  const tab = params.get("onglet") ?? "actifs";
+  const { on } = useAuth();
+  const tabs = TABS.filter((t) => !t.module || on(t.module));
+  const asked = params.get("onglet") ?? "actifs";
+  const tab = tabs.some((t) => t.id === asked) ? asked : "actifs";
   return (
     <>
-      <PageHeader title="Parc IT" subtitle="Disponibles, remis, en contrôle ; accessoires ; SIM et lignes ; logiciels ; inventaires." />
+      <PageHeader title="Parc IT" subtitle={`Disponibles, remis, en contrôle ; accessoires ; SIM et lignes${on("logiciels") ? " ; logiciels" : ""}${on("inventaire") ? " ; inventaires" : ""}.`} />
       <div className="row" role="tablist" style={{ marginBottom: "1rem" }}>
-        {TABS.map((t) => (
+        {tabs.map((t) => (
           <button
             key={t.id}
             role="tab"
@@ -43,6 +47,9 @@ export default function AssetsPage() {
 }
 
 function AssetsTab() {
+  // Étiquettes QR fermées pendant le pilote ; la saisie ou le scan d'un code
+  // pour retrouver un bien reste disponible.
+  const labelsOn = useAuth().on("inventaire");
   const navigate = useNavigate();
   const [filters, setFilters] = useState({ q: "", status: "", kind: "" });
   const [applied, setApplied] = useState(filters);
@@ -83,9 +90,11 @@ function AssetsTab() {
       <Section
         title={`Actifs (${list.data?.length ?? 0})`}
         actions={
-          <button className="btn" disabled={selected.length === 0} onClick={() => setPrinting(true)}>
-            Imprimer les étiquettes ({selected.length})
-          </button>
+          labelsOn && (
+            <button className="btn" disabled={selected.length === 0} onClick={() => setPrinting(true)}>
+              Imprimer les étiquettes ({selected.length})
+            </button>
+          )
         }
       >
         <form

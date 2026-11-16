@@ -46,6 +46,69 @@ impl ArchiveMode {
     }
 }
 
+/// Modules facultatifs, désactivables (pilote) : menus masqués, routes
+/// refusées, traitements automatiques arrêtés. Le cœur (personnel, arrivées,
+/// travail, formations, demandes, parc IT, remises, restitutions, décharges,
+/// Excel, reprise) n'est jamais désactivable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Module {
+    Vehicules,
+    Logiciels,
+    Inventaire,
+    Mutation,
+    Depart,
+    Etats,
+}
+
+impl Module {
+    pub const ALL: [Module; 6] = [Module::Vehicules, Module::Logiciels, Module::Inventaire, Module::Mutation, Module::Depart, Module::Etats];
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Module::Vehicules => "vehicules",
+            Module::Logiciels => "logiciels",
+            Module::Inventaire => "inventaire",
+            Module::Mutation => "mutation",
+            Module::Depart => "depart",
+            Module::Etats => "etats",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Module::Vehicules => "Véhicules",
+            Module::Logiciels => "Logiciels et licences",
+            Module::Inventaire => "Étiquettes et inventaire QR",
+            Module::Mutation => "Mutation",
+            Module::Depart => "Départ",
+            Module::Etats => "États des lieux",
+        }
+    }
+
+    /// `MODULES_DESACTIVES` : liste séparée par des virgules, ou « pilote »
+    /// (tous les modules facultatifs). Une valeur inconnue empêche le
+    /// démarrage : un module ne doit jamais rester ouvert par une faute de frappe.
+    pub fn parse_list(v: &str) -> anyhow::Result<Vec<Module>> {
+        let mut out = Vec::new();
+        for item in v.split(',').map(|s| s.trim().to_lowercase()).filter(|s| !s.is_empty()) {
+            if item == "pilote" {
+                out.extend(Module::ALL);
+                continue;
+            }
+            match Module::ALL.iter().find(|m| m.as_str() == item) {
+                Some(m) => out.push(*m),
+                None => anyhow::bail!(
+                    "MODULES_DESACTIVES : module inconnu « {item} » (pilote, {})",
+                    Module::ALL.map(|m| m.as_str()).join(", ")
+                ),
+            }
+        }
+        out.sort_by_key(|m| m.as_str());
+        out.dedup();
+        Ok(out)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ArchiveTarget {
     pub site_id: String,
@@ -91,6 +154,8 @@ pub struct Config {
     pub alert_km: i32,
     /// Délai après l'heure de coupure avant relance « accès à vérifier ».
     pub escalation_minutes: i64,
+    /// Modules facultatifs désactivés (pilote).
+    pub disabled_modules: Vec<Module>,
 }
 
 fn var(name: &str) -> Option<String> {
@@ -162,7 +227,12 @@ impl Config {
             alert_days: parse_or("ALERT_DAYS", 30)? as i32,
             alert_km: parse_or("ALERT_KM", 1000)? as i32,
             escalation_minutes: parse_or("ESCALATION_MINUTES", 60)?,
+            disabled_modules: Module::parse_list(&var("MODULES_DESACTIVES").unwrap_or_default())?,
         })
+    }
+
+    pub fn module_on(&self, m: Module) -> bool {
+        !self.disabled_modules.contains(&m)
     }
 
     /// Destinataire autorisé pendant le pilote ?

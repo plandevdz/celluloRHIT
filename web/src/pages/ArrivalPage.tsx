@@ -31,7 +31,7 @@ type ArrivalResult = {
 
 /** M01 / U1 : cinq champs, un bouton, avis immédiat aux équipes. */
 export default function ArrivalPage() {
-  const { has } = useAuth();
+  const { has, on } = useAuth();
   const sites = useLoad(() => api<Site[]>("/sites"), []);
   const [form, setForm] = useState(EMPTY);
   const [optional, setOptional] = useState({ matricule: "", department: "", manager: "", note: "", contract_type: "", job_profile_id: "" });
@@ -47,6 +47,8 @@ export default function ArrivalPage() {
   const [result, setResult] = useState<ArrivalResult | null>(null);
   // Choix manuels conservés quand un profil est appliqué (déclaré avant tout retour anticipé).
   const [kept, setKept] = useState<string[]>([]);
+  // Profil prévoyant un véhicule alors que le module est fermé (pilote).
+  const [vehicleOut, setVehicleOut] = useState(false);
   const health = useLoad(() => api<{ mail_mode: string }>("/health"), []);
   const mailMode = health.data?.mail_mode ?? "journal";
 
@@ -172,7 +174,9 @@ export default function ArrivalPage() {
         keptNow.push(c);
       }
     }
+    setVehicleOut(!on("vehicules") && (p?.needs ?? []).some((n: any) => n.category === "vehicule"));
     for (const n of p?.needs ?? []) {
+      if (n.category === "vehicule" && !on("vehicules")) continue;
       if (!keptNow.includes(n.category)) {
         next[n.category] = { category: n.category, answer: "oui", preference: n.preference, quantity: n.quantity, detail: n.detail, origin: "profil" };
       }
@@ -284,6 +288,12 @@ export default function ArrivalPage() {
         <section className="card">
           <details open={!!optional.job_profile_id}>
             <summary>Préciser les besoins maintenant</summary>
+            {vehicleOut && (
+              <Notice kind="warn">
+                Ce profil prévoit un véhicule : non géré dans l'application pendant le pilote. Traitez-le hors de l'application ; aucune
+                tâche n'est créée.
+              </Notice>
+            )}
             {kept.length > 0 && (
               <Notice kind="info">Vos choix manuels sont conservés : {kept.map((c) => needLabel[c]).join(", ")}.</Notice>
             )}

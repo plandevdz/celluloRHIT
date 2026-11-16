@@ -1,7 +1,8 @@
 import { FormEvent, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import { api, ApiError } from "../api";
-import { Badge, Empty, ErrorBox, Field, Loading, Modal, PageHeader, Section } from "../components";
+import { Badge, Empty, ErrorBox, Field, LegacyProof, Loading, Modal, PageHeader, Section } from "../components";
+import { useAuth } from "../auth";
 import { useCommand, useLoad } from "../hooks";
 import { assetConditionLabel, assetKindLabel, assetStatusLabel, fmtDate, fmtDateTime } from "../labels";
 import { LabelsDialog } from "./ParcExtras";
@@ -13,6 +14,7 @@ const movementKind: Record<string, string> = { remise: "Remise", restitution: "R
 
 export default function AssetPage() {
   const { id = "" } = useParams();
+  const { on } = useAuth();
   const detail = useLoad(() => api<any>(`/assets/${id}`), [id]);
   const cmd = useCommand();
   const [status, setStatus] = useState("");
@@ -51,9 +53,11 @@ export default function AssetPage() {
         }
         actions={
           <>
-            <button className="btn" onClick={() => setDialog("labels")}>
-              Imprimer l'étiquette
-            </button>
+            {on("inventaire") && (
+              <button className="btn" onClick={() => setDialog("labels")}>
+                Imprimer l'étiquette
+              </button>
+            )}
             <button className="btn" onClick={() => setDialog("edit")}>
               Modifier
             </button>
@@ -144,6 +148,7 @@ export default function AssetPage() {
                     <td>
                       {movementKind[h.kind] ?? h.kind} {h.reference}
                       {h.note && <div className="small muted">{h.note}</div>}
+                      {h.kind === "reprise" && <LegacyProof url={h.legacy_proof_url} reference={h.legacy_proof_ref} />}
                     </td>
                     <td>
                       <Link to={`/personnel/${h.employee_id}`}>{h.employee}</Link>

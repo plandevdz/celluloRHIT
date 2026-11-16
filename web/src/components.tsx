@@ -352,3 +352,20 @@ export function Tabs({ tabs, current, onSelect }: { tabs: { id: string; label: s
     </div>
   );
 }
+
+/** Garde reprise de SharePoint : jamais « signé » sans preuve identifiée,
+ *  jamais de PDF régénéré. Réservé aux vues RH, ADMIN et IT. */
+export function LegacyProof({ url, reference }: { url?: string | null; reference?: string | null }) {
+  if (url) {
+    return (
+      <div className="small">
+        Justificatif dans SharePoint :{" "}
+        <a href={url} target="_blank" rel="noopener noreferrer">
+          ouvrir l'ancien document
+        </a>
+      </div>
+    );
+  }
+  if (reference) return <div className="small">Justificatif dans SharePoint : {reference}</div>;
+  return <div className="small">Remise reprise de SharePoint — justificatif à rechercher dans l'ancien système</div>;
+}

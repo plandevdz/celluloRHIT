@@ -43,7 +43,7 @@ type CaseDetail = {
 
 export default function CasePage() {
   const { reference = "" } = useParams();
-  const { user, has } = useAuth();
+  const { user, has, on } = useAuth();
   const detail = useLoad(() => api<CaseDetail>(`/cases/${encodeURIComponent(reference)}`), [reference]);
   const cmd = useCommand();
   const [dialog, setDialog] = useState<
@@ -133,7 +133,7 @@ export default function CasePage() {
             ) : (
               <table>
                 <tbody>
-                  {needs.map((n) => (
+                  {needs.filter((n) => n.category !== "vehicule" || on("vehicules") || n.answer !== "a_preciser").map((n) => (
                     <tr key={n.id}>
                       <td>
                         <strong>{needLabel[n.category]}</strong>

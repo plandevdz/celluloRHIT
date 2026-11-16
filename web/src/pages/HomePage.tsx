@@ -1,5 +1,6 @@
 import { Link } from "react-router-dom";
 import { api } from "../api";
+import { useAuth } from "../auth";
 import { Badge, Empty, ErrorBox, Loading, PageHeader, Section } from "../components";
 import { useLoad } from "../hooks";
 import { caseKindLabel, fmtDate, maintenanceLabel, vehicleDocLabel } from "../labels";
@@ -19,13 +20,14 @@ type CaseItem = {
 };
 
 export default function HomePage() {
+  const { on } = useAuth();
   const onb = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=ONB&status=ouvert"), []);
   const dem = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=DEM&status=ouvert"), []);
   const toCheck = useLoad(() => api<any[]>("/employees/arrivals-to-check"), []);
   const off = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=OFF&status=ouvert"), []);
   const mut = useLoad(() => api<{ items: CaseItem[] }>("/cases?kind=MUT&status=ouvert"), []);
   const overview = useLoad(() => api<any>("/reports/overview"), []);
-  const deadlines = useLoad(() => api<any[]>("/vehicles/deadlines"), []);
+  const deadlines = useLoad(() => (on("vehicules") ? api<any[]>("/vehicles/deadlines") : Promise.resolve([])), [on("vehicules")]);
   const arrivals = onb.data?.items ?? [];
   const requests = dem.data?.items ?? [];
   const unowned = [...arrivals, ...requests].reduce((n, c) => n + c.unowned_tasks, 0);
@@ -35,7 +37,7 @@ export default function HomePage() {
     <>
       <PageHeader
         title="Accueil RH"
-        subtitle="Arrivées prévues, départs à préparer, signatures en attente et échéances véhicules."
+        subtitle={on("depart") ? "Arrivées prévues, départs à préparer, signatures en attente et échéances véhicules." : "Arrivées prévues, demandes ponctuelles et signatures en attente."}
         actions={
           <Link to="/arrivees/nouvelle" className="btn btn-primary">
             + Annoncer une arrivée
@@ -59,10 +61,12 @@ export default function HomePage() {
           <div className="value">{done}</div>
           <div className="label">Arrivées prêtes à clôturer</div>
         </div>
-        <div className="stat">
-          <div className="value">{off.data?.items.length ?? 0}</div>
-          <div className="label">Départs en cours</div>
-        </div>
+        {on("depart") && (
+          <div className="stat">
+            <div className="value">{off.data?.items.length ?? 0}</div>
+            <div className="label">Départs en cours</div>
+          </div>
+        )}
       </div>
 
       <div className="stack">
@@ -101,10 +105,12 @@ export default function HomePage() {
           <ErrorBox error={dem.error} onRetry={dem.reload} />
           {dem.loading && !dem.data ? <Loading /> : <CaseTable items={requests} empty="Aucune demande ouverte." />}
         </Section>
-        <Section title="Départs à préparer">
-          {off.loading && !off.data ? <Loading /> : <CaseTable items={off.data?.items ?? []} empty="Aucun départ en cours." />}
-        </Section>
-        {(mut.data?.items.length ?? 0) > 0 && (
+        {on("depart") && (
+          <Section title="Départs à préparer">
+            {off.loading && !off.data ? <Loading /> : <CaseTable items={off.data?.items ?? []} empty="Aucun départ en cours." />}
+          </Section>
+        )}
+        {on("mutation") && (mut.data?.items.length ?? 0) > 0 && (
           <Section title="Mutations en cours">
             <CaseTable items={mut.data!.items} empty="" />
           </Section>
@@ -129,6 +135,7 @@ export default function HomePage() {
               </ul>
             )}
           </Section>
+          {on("vehicules") && (
           <Section title={`Échéances véhicules (${deadlines.data?.length ?? 0})`}>
             {(deadlines.data?.length ?? 0) === 0 ? (
               <p className="empty">Aucune échéance proche.</p>
@@ -144,6 +151,7 @@ export default function HomePage() {
               </ul>
             )}
           </Section>
+          )}
         </div>
       </div>
     </>

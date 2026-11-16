@@ -747,12 +747,14 @@ struct AccountRow {
     verified_at: Option<DateTime<Utc>>,
     ended_at: Option<DateTime<Utc>>,
     created_at: DateTime<Utc>,
+    /// Repris de SharePoint : sans date de vérification, rien n'est réputé vérifié.
+    imported: bool,
 }
 
 async fn list_accounts(State(state): State<AppState>, user: CurrentUser, Path(id): Path<Uuid>) -> AppResult<Json<Vec<AccountRow>>> {
     user.require(&[Role::It, Role::Rh, Role::Admin])?;
     let rows = sqlx::query_as::<_, AccountRow>(
-        "SELECT id, system, platform, identifier, status, verified_at, ended_at, created_at
+        "SELECT id, system, platform, identifier, status, verified_at, ended_at, created_at, imported
            FROM employee_accounts WHERE employee_id = $1 ORDER BY created_at",
     )
     .bind(id)
@@ -834,7 +836,9 @@ async fn update_account(
     let n = sqlx::query(
         "UPDATE employee_accounts SET status = $3,
                 ended_at = CASE WHEN $3 = 'coupe' THEN now() ELSE NULL END,
-                verified_at = now()
+                -- Seule une confirmation « actif » vaut vérification ; « à vérifier »
+                -- ou une coupure ne datent pas une vérification qui n'a pas eu lieu.
+                verified_at = CASE WHEN $3 = 'actif' THEN now() ELSE verified_at END
           WHERE id = $2 AND employee_id = $1",
     )
     .bind(id)

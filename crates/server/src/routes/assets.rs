@@ -198,7 +198,8 @@ async fn detail(State(state): State<AppState>, user: CurrentUser, Path(id): Path
         "SELECT coalesce(jsonb_agg(jsonb_build_object(
                     'movement_id', m.id, 'reference', m.reference, 'kind', m.kind, 'effective_at', m.effective_at,
                     'employee', e.first_name || ' ' || e.last_name, 'employee_id', e.id,
-                    'operator', u.display_name, 'condition', ml.condition, 'note', m.note) ORDER BY m.effective_at DESC), '[]')
+                    'operator', u.display_name, 'condition', ml.condition, 'note', m.note,
+                    'legacy_proof_url', m.legacy_proof_url, 'legacy_proof_ref', m.legacy_proof_ref) ORDER BY m.effective_at DESC), '[]')
            FROM movement_lines ml JOIN movements m ON m.id = ml.movement_id
            JOIN employees e ON e.id = m.employee_id JOIN users u ON u.id = m.operator_id
           WHERE ml.asset_id = $1",

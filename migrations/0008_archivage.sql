@@ -14,3 +14,13 @@ CREATE INDEX document_versions_archive_due_idx ON document_versions (archive_nex
 ALTER TABLE deliveries
     ADD COLUMN retried_by      uuid REFERENCES users(id),
     ADD COLUMN retried_reason  text;
+
+-- Repères techniques du serveur. « journal_jusqua » : dernier passage du
+-- worker en mode journal ; « envoi_depuis » : activation de l'envoi Exchange
+-- qui suit. Aucun avis créé avant cette activation (période de test) n'est
+-- expédié : il est consigné.
+CREATE TABLE app_settings (
+    key         text PRIMARY KEY,
+    at          timestamptz NOT NULL,
+    updated_at  timestamptz NOT NULL DEFAULT now()
+);

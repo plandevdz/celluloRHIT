@@ -1,5 +1,6 @@
 import { api } from "../api";
 import { useLoad } from "../hooks";
+import { useAuth } from "../auth";
 import { answerLabel, EQUIPMENT_NEEDS, NEED_CATEGORIES, needLabel, needTeam, roleLabel } from "../labels";
 
 export type NeedValue = {
@@ -34,6 +35,7 @@ export function NeedsEditor({
   onTrainings: (t: TrainingValue[]) => void;
   existingTrainingIds?: string[];
 }) {
+  const { on } = useAuth();
   const catalog = useLoad(() => api<{ id: string; name: string; active: boolean }[]>("/trainings/catalog"), []);
   const trainers = useLoad(() => api<{ id: string; display_name: string }[]>("/users/directory?role=FORMATION"), []);
   // Toute retouche par le RH fait de la valeur une saisie RH.
@@ -52,7 +54,7 @@ export function NeedsEditor({
             </tr>
           </thead>
           <tbody>
-            {NEED_CATEGORIES.filter((c) => c !== "formation").map((c) => {
+            {NEED_CATEGORIES.filter((c) => c !== "formation" && (c !== "vehicule" || on("vehicules"))).map((c) => {
               const n = needs[c];
               return (
                 <tr key={c}>

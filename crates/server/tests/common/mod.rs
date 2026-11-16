@@ -58,6 +58,7 @@ pub fn test_config(data_dir: std::path::PathBuf) -> Config {
         alert_days: 30,
         alert_km: 1000,
         escalation_minutes: 60,
+        disabled_modules: vec![],
     }
 }
 
@@ -66,6 +67,17 @@ impl TestApp {
         let dir = std::env::temp_dir().join(format!("cellulo-test-{}", Uuid::new_v4()));
         std::fs::create_dir_all(&dir).unwrap();
         let state = AppState::new(pool, test_config(dir.clone()));
+        TestApp { router: app(state.clone()), state, _data: tempdir::TempDirGuard(dir) }
+    }
+
+    /// Instance avec une configuration ajustée (mode pilote, mode d'envoi).
+    #[allow(dead_code)]
+    pub async fn with_config(pool: PgPool, adjust: impl FnOnce(&mut Config)) -> Self {
+        let dir = std::env::temp_dir().join(format!("cellulo-test-{}", Uuid::new_v4()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut config = test_config(dir.clone());
+        adjust(&mut config);
+        let state = AppState::new(pool, config);
         TestApp { router: app(state.clone()), state, _data: tempdir::TempDirGuard(dir) }
     }
 
