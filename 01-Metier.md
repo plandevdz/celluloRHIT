@@ -79,3 +79,16 @@ La correspondance des 184 champs de l'ancienne application est tenue dans `docs/
 - **Anciens profils Manager, Moyens généraux, Responsable** : aucun droit automatique. Un manager se désigne sur la fiche sans obtenir d'accès.
 - **Formation** : la personne qui a animé la session (compte FORMATION ou simple nom, sans compte créé) est distincte de l'utilisateur qui l'enregistre.
 - **Non validé à ce jour** : l'abandon des liens aux anciens dossiers et la réouverture manuelle des dossiers en cours (voir `docs/pilote.md`, décision 1).
+
+## Pilote sur un site (décision du 16/11/2026, pilote seulement)
+
+- À compter de la date de démarrage, seules les **nouvelles** arrivées et demandes ponctuelles du site pilote sont ouvertes dans l'application.
+- Un dossier déjà ouvert dans Power Apps y est terminé par son équipe habituelle : pas de ressaisie systématique, pas de réouverture, pas de deuxième notification.
+- Les salariés déjà présents peuvent avoir leur fiche et leurs biens repris, sans recréer leurs anciens dossiers.
+- Les exemples et le détail sont dans `docs/pilote.md`. Cette règle ne valide pas l'abandon des liens historiques (T08).
+- Fonctions ouvertes : personnel, profils, arrivées, Mon travail, formations, demandes ponctuelles, parc IT, remises, restitutions, décharges, scans, Excel ; reprise SharePoint pour l'ADMIN.
+- Fonctions fermées : véhicules, logiciels, étiquettes et campagnes QR, mutation, départ, états (`MODULES_DESACTIVES=pilote`). Un besoin véhicule ne crée aucune tâche pendant le pilote.
+- Anciennes décharges signées : elles restent dans SharePoint, sans import ni PDF régénéré.
+  - Avec une référence fiable, l'application l'affiche aux RH, ADMIN et IT.
+  - Sinon, elle indique « Remise reprise de SharePoint — justificatif à rechercher dans l'ancien système ».
+  - Jamais « signé » sans preuve identifiée.

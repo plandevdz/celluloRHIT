@@ -247,6 +247,16 @@ sudo docker compose logs app | grep -i -E "migr|démarrée|error"
 
 Le `.env` existant reste valable : les nouvelles variables ont des valeurs par défaut (voir `.env.example`). Les fiches et dossiers existants ne reçoivent aucune valeur rétroactive : profil, contrat, wilayas et ligne principale restent vides (« — ») jusqu'à saisie ou reprise. Les classeurs Excel exportés avant cette version se réimportent tels quels. Retour arrière : comme pour la 0002, restaurer la sauvegarde prise juste avant.
 
+## Mode pilote : fonctions ouvertes
+
+`MODULES_DESACTIVES=pilote` est la valeur par défaut du `docker-compose.yml`. Il ferme les véhicules, les logiciels, les étiquettes et campagnes QR, la mutation, le départ et les états :
+- menus et boutons masqués ;
+- liens directs : « Fonction non ouverte » ;
+- API refusée ;
+- échéances, mutations et coupures non traitées par le worker.
+
+Ouvrir un module après sa recette : retirer son nom de la liste (ex. `MODULES_DESACTIVES=vehicules,etats`), puis `docker compose up -d`. Une faute de frappe empêche le démarrage : un module ne reste jamais ouvert par erreur. La règle du pilote (seules les nouvelles opérations) est décrite dans `docs/pilote.md`.
+
 ## Raccorder Exchange Online (envoi des avis)
 
 À faire avec l'administrateur Microsoft 365, d'abord vers une **boîte de test** :
@@ -258,6 +268,7 @@ Le `.env` existant reste valable : les nouvelles variables ont des valeurs par d
 3. Donner le droit **Application Mail.Send limité à cette seule boîte** (Exchange « Application RBAC ») ; vérifier qu'aucun octroi Entra plus large n'existe. Tester le refus sur une seconde boîte.
 4. Sur le serveur : `sudo mkdir -m 700 /opt/celluloplast/secrets`, y copier `graph-envoi.crt` et `graph-envoi.key`, puis `sudo chown 10001 secrets/* && sudo chmod 600 secrets/*`.
 5. Dans `.env` : `MAIL_MODE=graph`, `MAIL_SENDER=<boîte>`, `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, et pendant le pilote `MAIL_ALLOWED_DOMAINS=<domaine>` et/ou `MAIL_TEST_RECIPIENT=<boîte de test>`. Puis `sudo docker compose up -d`.
+Les avis créés pendant la période en mode journal (tests, pilote) ne partent jamais lors de l'activation : ils sont consignés « avis antérieur à l'activation de l'envoi ».
 6. Contrôler dans Administration → « Archivage et paramètres » et « Avis et mails » : « Accepté par Exchange » n'est pas une preuve de livraison ; « à vérifier » signale un résultat inconnu, jamais réexpédié automatiquement.
 
 ## Raccorder l'archivage SharePoint

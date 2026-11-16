@@ -77,3 +77,17 @@ Les neuf scénarios ont été joués dans le navigateur. La fiche de recette à 
 Restent à faire sur site :
 - ouvrir le classeur exporté dans Excel et dans LibreOffice ;
 - imprimer la décharge.
+
+## Mode pilote (16/11/2026)
+
+Joué dans le navigateur sur une instance neuve (`MODULES_DESACTIVES=pilote`, mode journal, données fictives), et couvert par le test `pilote` (3 tests). Fiche : [docs/recette-pilote.md](docs/recette-pilote.md).
+
+| Essai | Résultat |
+|---|---|
+| Menus, accueil, boutons de fiche, onglets du parc, liens directs `/vehicules` et `/etats` | **nav** : modules fermés absents ; « Fonction non ouverte » ; API refusée (**auto**, 11 routes) |
+| Arrivée avec un profil qui prévoit un véhicule | **nav** : avertissement, 1 action (email), aucune tâche RH, clôture acceptée. **auto** : besoin véhicule refusé à l'annonce, à la révision et en demande ponctuelle |
+| Carte de visite demandée après clôture | **nav** : DEM avisée au seul Graphiste, ONB resté clos |
+| Restitution de matériel ancien (reprise) | **nav** : justificatif SharePoint affiché (pièce jointe n° 701, lien) ; restitution avec décharge citant la remise d'origine ; aucune décharge pour la remise ancienne ; dépôt du scan confirmé immédiatement |
+| Adresse cPanel reprise sans preuve de vérification | **nav** : « Adresse reprise — vérification non renseignée », M365 décoché ; « Actif (vérifié) » proposé. **auto** : « à vérifier » ne date rien |
+| Traitements automatiques | **auto** : aucune alerte véhicule, aucune mutation ni coupure appliquée par le worker |
+| Anciens avis de test | **auto** : à l'activation d'Exchange, les avis créés en mode journal sont consignés, jamais envoyés ; les nouveaux sont traités. Non joué avec un vrai Exchange |

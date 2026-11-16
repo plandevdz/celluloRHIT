@@ -1,3 +1,3 @@
-ID;Title;TypeObjet;Materiel;Ligne;Employe;DateAttribution;DateRestitution;Observations;AttribueParNom;AttribueParEmail;Dossier
-701;AFF-0045;Matériel;PC-201;;Nadia Cherif (fictif);03/05/2022;;Avec sacoche;Karim IT (ancien);karim.ancien@exemple.test;ONB-2022-031
-702;AFF-0046;Ligne;;0661000002;Nadia Cherif (fictif);03/05/2022;;;Karim IT (ancien);karim.ancien@exemple.test;ONB-2022-031
+ID;Title;TypeObjet;Materiel;Ligne;Employe;DateAttribution;DateRestitution;Observations;AttribueParNom;AttribueParEmail;Dossier;Attachments;LienJustificatif
+701;AFF-0045;Matériel;PC-201;;Nadia Cherif (fictif);03/05/2022;;Avec sacoche;Karim IT (ancien);karim.ancien@exemple.test;ONB-2022-031;Oui;
+702;AFF-0046;Ligne;;0661000002;Nadia Cherif (fictif);03/05/2022;;;Karim IT (ancien);karim.ancien@exemple.test;ONB-2022-031;;https://exemple-fictif.sharepoint.com/sites/rh/Documents/AFF-0046.pdf

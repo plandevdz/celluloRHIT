@@ -19,6 +19,11 @@ Chaque champ se lit selon deux questions distinctes :
 Hors listes :
 - **Documents et Pièces jointes** (anciennes décharges signées, autres pièces) : **consultables uniquement dans SharePoint**. Ils ne sont ni importés ni rattachés aux mouvements repris (hypothèse H3).
 - Une garde reprise n'a pas de décharge dans l'application. Aucune décharge n'est fabriquée pour une remise ancienne.
+- Une référence fiable est conservée et affichée aux RH, ADMIN et IT :
+  - un lien `LienJustificatif` vers `https://<site>.sharepoint.com/…` ;
+  - ou la colonne `Attachments` cochée, avec l'`ID` de l'élément Affectations.
+
+  Sans cette référence, l'application affiche « Remise reprise de SharePoint — justificatif à rechercher dans l'ancien système ».
 
 ## Couverture des nouvelles saisies
 
@@ -226,10 +231,10 @@ Répartition :
 | `DateEntree` | DateEntree | Déjà couvert | Arrivée prévue (à venir) ou présence réelle confirmée (actif) | RH, ADMIN | **Conservée et exploitable** : Repris ; une date réelle confirmée n'est jamais réécrite par import |
 | `DateSortie` | DateSortie | Déjà couvert | Date de sortie (sorti) ou sortie prévue (en départ) | RH, ADMIN | **Conservée et exploitable** : Repris |
 | `Departement` | Departement | Déjà couvert | Fiche → situation ; filtre de la liste | RH, ADMIN | **Conservée et exploitable** : Repris (texte de la liste fermée historique) |
-| `EmailPro` | EmailPro | Couvert autrement, sans perte | Fiche → comptes et accès (adresse réellement créée) | IT, ADMIN | **Conservée et exploitable** : Reprise comme compte e-mail si la plateforme est connue (cPanel ou M365), sinon signalée |
+| `EmailPro` | EmailPro | Couvert autrement, sans perte | Fiche → comptes et accès (adresse réellement créée) | IT, ADMIN | **Conservée et exploitable** : Compte consigné, affiché « Adresse reprise — vérification non renseignée » : aucune date de vérification inventée |
 | `Fonction` | Fonction | Déjà couvert | Fiche → poste réel (distinct du profil) | RH, ADMIN | **Conservée et exploitable** : Repris ; vide → « À préciser » |
 | `LignePrincipale` | LignePrincipale | Déjà couvert | Fiche → lignes mobiles, marque « principale » | RH, IT, ADMIN (parmi les lignes réellement détenues) | **Conservée et exploitable** : Appliquée seulement si la SIM de cette ligne est détenue (reprendre LignesMobiles d'abord) |
-| `M365Operationnel` | M365Operationnel | Déjà couvert | Fiche → « Compte Microsoft 365 opérationnel — vérifié » | IT, ADMIN | **Conservée et exploitable** : Repris, indépendant de l'adresse |
+| `M365Operationnel` | M365Operationnel | Déjà couvert | Fiche → « Compte Microsoft 365 opérationnel — vérifié » | IT, ADMIN | **Conservée et exploitable** : Repris avec sa date d'activation ; « Oui » sans date : non activé, gardé en texte |
 | `Manager` | Manager | Déjà couvert | Fiche → manager choisi parmi les salariés (lien cliquable) | RH, ADMIN | **Conservée et exploitable** : Par ancien ID, sinon titre repris unique, sinon e-mail pro unique ; sinon « à rattacher » |
 | `ManagerEmail` | ManagerEmail | Couvert autrement, sans perte | Sert uniquement à retrouver la fiche du manager | — | **Non reprise** : Sert seulement à retrouver la fiche du manager ; non stocké |
 | `ManagerNom` | ManagerNom | Couvert autrement, sans perte | Affiché « à rattacher » tant qu'aucune fiche n'est reliée | RH, ADMIN | **Conservée en texte seulement** : Affiché « à rattacher » tant qu'aucune fiche n'est reliée |

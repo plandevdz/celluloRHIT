@@ -22,6 +22,7 @@ cargo test -p server --test lot1             # périmètre, présence, preuves, 
 cargo test -p server --test lot2_excel       # import/export Excel
 cargo test -p server --test livraison1       # 9 scénarios de la 1re livraison (fiche, profils, équipements, Excel v2)
 cargo test -p server --test arbitrages       # règles provisoires du 16/11 (intervenant sans compte, cases anciennes, salarié déjà présent)
+cargo test -p server --test pilote           # mode pilote : modules fermés, besoin véhicule, anciens avis, preuves anciennes
 cargo test -p server --test mutation_depart  # R09, R10 (aussi : vehicules, logiciels, inventaire, graph, reprise)
 cargo run -p server -- serve                 # API + web sur :8080 (migrations au démarrage)
 cargo run -p server -- worker                # avis + PDF en attente (processus séparé)
@@ -34,7 +35,7 @@ cd web && npm run build      # tsc --noEmit + build dans web/dist (servi par l'A
 docker compose up -d --build # déploiement complet (nécessite .env, voir .env.example)
 ```
 
-En local, `serve` a besoin de `WEB_DIR=web/dist`, `COOKIE_SECURE=false` et `PUBLIC_URL=http://localhost:8080` ; sous Windows, les polices PDF sont lues dans `C:/Windows/Fonts/arial*.ttf`. Toutes les variables sont dans `crates/server/src/config.rs`.
+`MODULES_DESACTIVES` (`pilote` ou liste : vehicules, logiciels, inventaire, mutation, depart, etats) ferme des modules : menus masqués (`useAuth().on`), routes refusées (`routes::module_of`), traitements du worker arrêtés ; toute nouvelle route d'un module facultatif doit être ajoutée à `module_of`. En local, `serve` a besoin de `WEB_DIR=web/dist`, `COOKIE_SECURE=false` et `PUBLIC_URL=http://localhost:8080` ; sous Windows, les polices PDF sont lues dans `C:/Windows/Fonts/arial*.ttf`. Toutes les variables sont dans `crates/server/src/config.rs`.
 
 ## Architecture
 
