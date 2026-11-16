@@ -2,6 +2,8 @@
 
 Instance de **test** uniquement, jamais la production. Durée : environ 40 minutes pour la partie 1.
 
+Recette terrain de Chéraga : installation de la VM de recette et restauration sur une VM vierge dans [deploy/recette-cheraga.md](../deploy/recette-cheraga.md).
+
 **Préparation**
 1. Base vide.
 2. Réglages : `MAIL_MODE=journal`, `ARCHIVE_MODE=desactive`, `MODULES_DESACTIVES=pilote`.

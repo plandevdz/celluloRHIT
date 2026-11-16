@@ -200,7 +200,7 @@ La **reprise en production** sur une nouvelle machine (projet `celluloplast`, `.
 - chiffrement et déchiffrement par `backup.sh` : **testés** avec des secrets fictifs et un faux `docker` (`deploy/tests/test-backup.sh`, 21 contrôles réussis) ;
 - logique de `restore-isole.sh` : **testée** avec un faux `docker` (`deploy/tests/test-restore.sh`, 22 contrôles réussis) ;
 - restauration PostgreSQL + documents : **exécutée et réussie** hors Docker (pg_dump/pg_restore vers une base neuve, dossier de documents neuf ; dossier, rôles et empreintes PDF et scan identiques ; voir 05-Recette.md, « RP ») ;
-- **recette complète sur une VM avec un vrai Docker** (`backup.sh` puis `restore-isole.sh` ; comparaison du dossier, des rôles, des empreintes PDF/scan et du certificat racine Caddy avant/après) : **NON EXÉCUTÉE**. Docker n'est pas utilisable sur le poste de développement, et la production est exclue.
+- **recette complète sur une VM avec un vrai Docker** (`backup.sh` puis `restore-isole.sh` ; comparaison du dossier, des rôles, des empreintes PDF/scan et du certificat racine Caddy avant/après) : **NON EXÉCUTÉE**. Docker n'est pas utilisable sur le poste de développement, et la production est exclue. Procédure prévue à Chéraga, sur deux VM de test : [recette-cheraga.md](recette-cheraga.md) (à exécuter sur site).
 
 ## Démonstration (données fictives uniquement)
 
