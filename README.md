@@ -72,7 +72,7 @@ Par rapport à la v1 : cinq rôles cumulables, cinq champs pour annoncer une arr
 4. Mutation, démission et traitements à échéance ; valider les dates, les conflits de poste et la séparation sortie/coupure/retour.
 5. Piloter sur un site avec données fictives, tester imprimante et douchette réelles ; reprise SharePoint à blanc, rapprochement, sauvegarde restaurée et bascule maîtrisée.
 
-### Avancement (15/11/2026)
+### Avancement (19/11/2026)
 | Étape | Implémenté | Testé automatiquement | Vérifié dans le navigateur | À valider sur site |
 |---|---|---|---|---|
 | 1. Socle (rôles, références, HTTPS, Docker, sauvegarde) | oui | oui | oui | restauration Docker complète, CA conservée |
@@ -82,8 +82,9 @@ Par rapport à la v1 : cinq rôles cumulables, cinq champs pour annoncer une arr
 | 3. QR et inventaire (R07), licences et véhicules (R11, R12), référentiels, états des lieux | oui | oui | oui (inventaire, logiciels, véhicules) | impression des étiquettes, douchette |
 | 3. Envoi Exchange (Graph) et archivage SharePoint (R13) | oui (désactivés par défaut) | oui, contre un faux serveur Graph | — | raccordement réel : boîte et applications Entra à créer |
 | 4. Mutation, démission, traitements à échéance (R09, R10) | oui | oui | oui (départ) | — |
-| 5. Reprise des listes SharePoint (T08) | oui | oui | oui (aperçu, décisions) | reprise à blanc avec les vrais exports |
-| 5. Pilote | non | — | — | — |
+| 5. Reprise des listes SharePoint (T08) | oui | oui | oui (aperçu, décisions) | fait : vrais exports importés le 19/11 (données de départ, à compléter par chaque équipe) |
+| 5. Pilote | oui (`MODULES_DESACTIVES=pilote`) | oui (`pilote`) | oui | en service depuis le 19/11 ; impression A4, douchette, Excel/LibreOffice et noms arabes à constater avec la première arrivée |
+| Administration depuis l'interface (modules, mail, archive, échéances, sauvegarde chiffrée, modèles de tâches) | oui | oui (`administration`) | oui | sauvegarde chiffrée réussie sur le serveur le 19/11 |
 | **1re livraison** (fiche complète, profils administrables, équipements distincts, Excel v2) : 9 scénarios | oui | oui (`livraison1`, `arbitrages`) | oui (les 9 scénarios) | classeur ouvert dans Excel et LibreOffice ; impression |
 
 Le détail par scénario est dans 05-Recette.md. La destination de chaque champ de l'ancienne application est dans `docs/correspondance-sharepoint.md`.
@@ -92,13 +93,15 @@ Le détail par scénario est dans 05-Recette.md. La destination de chaque champ 
 Le périmètre recommandé pour le pilote, les écarts classés et les décisions en attente sont dans `docs/pilote.md` ; la fiche de recette dans `docs/recette-pilote.md`. Ces sujets sont déjà présents dans le code, mais leur recette n'a pas bloqué la première livraison. Ils seront recettés chacun avec son lot :
 1. véhicules et logiciels (R11, R12) ;
 2. étiquettes QR et inventaire (R07), avec la douchette réelle ;
-3. mutation et départ complet (R09, R10), avec les wilayas cibles d'une mutation, qui restent **à livrer** ;
+3. mutation et départ complet (R09, R10), y compris les wilayas cibles d'une mutation ;
 4. raccordement Exchange et SharePoint (R13), sur une boîte et un site de test ;
-5. modèles de tâches paramétrables (délai, instructions, ordre d'affichage), **à livrer**. Aujourd'hui, les tâches sont générées besoin par besoin.
+5. restauration complète sur une machine de test (jamais exécutée : voir deploy/README.md).
+
+Les modèles de tâches (libellé, consignes, délai, ordre d'affichage) se règlent dans Administration → Modèles de tâches.
 
 Règles provisoires appliquées le 16/11 (voir 01-Metier) : « Poste fixe » conservé tel quel, ancienne « Carte de visite » en texte seulement, aucun droit pour les anciens profils Manager / Moyens généraux / Responsable, intervenant de formation possible sans compte. Décisions en attente : `docs/pilote.md`, section 4.
 
-Étape suivante : pilote sur un site (reprise SharePoint à blanc, raccordement Exchange vers une boîte de test, impression et douchette réelles, restauration sur VM).
+Étape suivante : utilisation réelle en mode pilote. Restent à faire : raccordement Exchange (Administration → Paramètres), installation du certificat racine sur les PC (`deploy/certificat-intune.md`), constats sur site (impression, douchette), restauration sur une machine de test, puis ouverture des modules fermés un par un après leur recette.
 
 Pour chaque tranche : livrer code, migrations, tests d’intégration, données fictives, démonstration dans un navigateur sur poste Windows et écarts restants. Ne pas activer les anciens flux ni envoyer de vrais mails pendant les tests. Ne pas intégrer de secrets dans le projet. Avant production seulement : confirmer matériel, IP/DNS, expéditeur Exchange, bibliothèque documentaire, cibles de sauvegarde et destinataires d’escalade.
 

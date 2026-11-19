@@ -103,7 +103,7 @@ Une demande d'arrivée avec un profil qui prévoit un véhicule :
 
 ## 5. Décision restant à votre main
 
-- **Date de démarrage du pilote** et site retenu.
+- ~~Date de démarrage du pilote et site retenu~~ : en service depuis le 19/11/2026, site de Cheraga (§7).
 - L'historique (H1, H2, H3 de la correspondance) est sans objet : l'ancienne application n'a jamais été en production (§0).
 
 ## 6. Livré le 16/11/2026 (après le premier essai sur la VM)
@@ -117,3 +117,15 @@ Une demande d'arrivée avec un profil qui prévoit un véhicule :
 | Modèles de tâches | Administration → Modèles de tâches (consignes affichées dans Mon travail) |
 | Ouvrir le scan signé | Bouton sur chaque décharge signée |
 | Wilayas cibles d'une mutation | Formulaire de mutation, appliquées à la date d'effet (module fermé pendant le pilote) |
+
+## 7. Mise en service du 19/11/2026
+
+| Étape | État |
+|---|---|
+| Version installée sur le serveur | `main` (fusion de la PR n° 2), migrations 1 à 9 |
+| Sauvegarde chiffrée | Configurée dans Administration → Sauvegardes, première sauvegarde réussie ; clé privée conservée hors du serveur |
+| Données de départ | Toutes les listes importées : wilayas, catalogue, utilisateurs (sans mot de passe), profils, personnel (fiches sans site sur « À préciser »), matériel IT, ligne, affectation. La liste Formations exportée était vide |
+| Comptes | Les comptes importés attendent leur lien d'activation (Administration → Utilisateurs → « Nouveau lien ») ; rôles à revoir par l'ADMIN |
+| Certificat HTTPS sur les PC | Par Intune : `deploy/certificat-intune.md` |
+| Mails | Mode journal : aucun envoi tant qu'Exchange n'est pas raccordé (Administration → Paramètres) |
+| Encore à constater | Impression A4 des décharges, douchette, classeur dans Excel et LibreOffice, noms arabes dans les PDF (avec la première arrivée) ; restauration complète sur une machine de test |

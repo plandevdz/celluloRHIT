@@ -46,6 +46,7 @@ Depuis le PC : `scp it1@<IP>:/tmp/celluloplast-root.crt .`
 
 Installez `celluloplast-root.crt` sur chaque PC dans **Autorités de certification racines de confiance** :
 - par GPO : Configuration ordinateur → Paramètres Windows → Paramètres de sécurité → Stratégies de clé publique → Autorités de certification racines de confiance → Importer ;
+- par Intune (script PowerShell, avec vérification de l'empreinte et suivi par PC) : voir [certificat-intune.md](certificat-intune.md) et le générateur `deploy/intune/Generer-ScriptsIntune.ps1` ;
 - ou manuellement, en PowerShell administrateur : `certutil -addstore -f Root celluloplast-root.crt`.
 
 Ensuite `https://<IP-du-serveur>/` s'ouvre dans Edge ou Chrome sans avertissement. Ne demandez jamais aux utilisateurs d'ignorer un avertissement de certificat. Pour utiliser plutôt un certificat de la PKI d'entreprise, remplacez `tls internal` par `tls /chemin/cert.pem /chemin/cle.pem` dans `deploy/Caddyfile`.

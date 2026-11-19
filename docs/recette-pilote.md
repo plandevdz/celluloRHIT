@@ -65,7 +65,7 @@ Cochez **OK** ou notez ce que vous voyez.
 ## Partie 2 — Modules futurs (hors pilote)
 
 À jouer **plus tard**, sur une autre instance de test, avec `MODULES_DESACTIVES=` (vide) :
-- **Mutation** : préparation, comparaison « conserver / ajouter / reprendre », confirmation, application à la date d'effet par le worker. Les wilayas cibles ne sont pas livrées.
+- **Mutation** : préparation, comparaison « conserver / ajouter / reprendre », confirmation, application à la date d'effet par le worker, y compris les wilayas cibles (inchangées avant la date d'effet, remplacées à l'application).
 - **Départ** : dernier jour et heure de coupure, coupure confirmée par l'IT, sortie, écarts.
 - **Véhicules** : remise depuis une tâche RH, pièces, entretien, retour au loueur, alertes.
 - **Logiciels** : sièges, renouvellement, alerte IT.

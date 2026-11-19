@@ -1,6 +1,6 @@
 # Correspondance SharePoint → application
 
-Ce document indique la destination des **184 champs métier** des 14 listes de l'ancienne application. Les colonnes techniques de SharePoint en sont exclues. Mise à jour du 16/11/2026.
+Ce document indique la destination des **184 champs métier** des 14 listes de l'ancienne application. Les colonnes techniques de SharePoint en sont exclues. Mise à jour du 19/11/2026.
 
 Chaque champ se lit selon deux questions distinctes :
 
@@ -13,11 +13,11 @@ Chaque champ se lit selon deux questions distinctes :
 |---|---|---|
 | Conservée et exploitable | 102 | Reprise dans un champ structuré, utilisable par l'application : filtres, règles, remises, restitutions. |
 | Conservée en texte seulement | 22 | Visible sur la fiche, le mouvement ou la session, mais aucune règle ne l'utilise : pas de filtre, pas de preuve, pas de tâche. |
-| Consultable uniquement dans SharePoint | 55 | L'ancienne application, gardée en lecture seule, reste la seule source. Cela concerne les dossiers, les tâches et les modèles. |
+| Non reprise (essais) | 55 | Dossiers, tâches et modèles de l'ancienne application : elle n'a jamais été en production, ce n'étaient que des essais. Rien n'est à reprendre ni à consulter. |
 | Non reprise | 5 | Valeur technique ou recalculée. Elle n'est stockée nulle part et ne manque à aucun usage. |
 
 Hors listes :
-- **Documents et Pièces jointes** (anciennes décharges signées, autres pièces) : **consultables uniquement dans SharePoint**. Ils ne sont ni importés ni rattachés aux mouvements repris (hypothèse H3).
+- **Documents et Pièces jointes** : non importés. Ce n'étaient que des essais ; les vraies décharges sont produites et signées dans l'application.
 - Une garde reprise n'a pas de décharge dans l'application. Aucune décharge n'est fabriquée pour une remise ancienne.
 - Une référence fiable est conservée et affichée aux RH, ADMIN et IT :
   - un lien `LienJustificatif` vers `https://<site>.sharepoint.com/…` ;
@@ -29,10 +29,10 @@ Hors listes :
 
 | Situation | Champs |
 |---|---|
-| Déjà couvert | 119 |
+| Déjà couvert | 124 |
 | Couvert autrement, sans perte | 41 |
-| Partiellement couvert | 3 |
-| À livrer | 3 |
+| Partiellement couvert | 1 |
+| À livrer | 0 |
 | Remplacé par une décision métier | 16 |
 | Point à arbitrer | 2 |
 
@@ -56,7 +56,7 @@ Répartition :
 | `Dossiers.VersionProcessus` | Hypothèse en attente de votre accord | Sans enjeu métier : valeur technique non reprise. |
 | `Formations.Dossier` | Hypothèse en attente de votre accord | 02-Technique, T08 : « Préserver identifiants de liens, références et dates ». En attendant : texte. |
 | `Formations.Title` | Hypothèse en attente de votre accord | 02-Technique, T08 : « Préserver identifiants de liens, références et dates ». En attendant : texte. |
-| `ModelesTaches.OrdreTache` | Confirmée par le cahier | 01-Metier, M02 : « Un autre peut préparer l'adresse pendant que le premier prépare le PC. Seul un prérequis concret bloque ». Un ordre d'affichage paramétrable reste à livrer. |
+| `ModelesTaches.OrdreTache` | Confirmée par le cahier | 01-Metier, M02 : « Un autre peut préparer l'adresse pendant que le premier prépare le PC. Seul un prérequis concret bloque ». L'ordre d'affichage se règle dans Administration → Modèles de tâches. |
 | `Personnel.BesoinEmailPro` | Hypothèse en attente de votre accord | Un besoin appartient à un dossier, pas à la fiche. La valeur est gardée en texte en attendant votre accord. |
 | `ProfilsPoste.MessageriePrevue` | Confirmée par le cahier | 01-Metier, M01 : « RH ne choisit pas cPanel ou Microsoft 365 » |
 | `Taches.OrdreTache` | Confirmée par le cahier | 01-Metier, M02 : « Un autre peut préparer l'adresse pendant que le premier prépare le PC. Seul un prérequis concret bloque » |
@@ -132,40 +132,40 @@ Répartition :
 
 | Champ | Libellé | Nouvelles saisies | Où le saisir / le consulter | Qui modifie | Valeur ancienne après reprise |
 |---|---|---|---|---|---|
-| `BesoinCarteVisite` | BesoinCarteVisite | Déjà couvert | Besoin de cartes (tâche Graphiste) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinEmailPro` | BesoinEmailPro | Déjà couvert | Besoin d'adresse professionnelle (Oui / Non / À préciser) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinIntellix` | BesoinIntellix | Déjà couvert | Besoin Intelix | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinLigneMobile` | BesoinLigneMobile | Déjà couvert | Besoin SIM / ligne (distinct du téléphone) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinPCPortable` | BesoinPCPortable | Couvert autrement, sans perte | Besoin PC + préférence fixe / portable / sans préférence | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinsValides` | BesoinsValides | Remplacé par une décision métier | Pas d'étape « Valider les besoins » : IT et Formation voient l'annonce immédiatement | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinsValidesParEmail` | BesoinsValidesParEmail | Remplacé par une décision métier | Idem (journal : auteur de chaque révision de besoin) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinVehicule` | BesoinVehicule | Déjà couvert | Besoin véhicule (tâche RH) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `BesoinXena` | BesoinXena | Déjà couvert | Besoin Xena | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
+| `BesoinCarteVisite` | BesoinCarteVisite | Déjà couvert | Besoin de cartes (tâche Graphiste) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinEmailPro` | BesoinEmailPro | Déjà couvert | Besoin d'adresse professionnelle (Oui / Non / À préciser) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinIntellix` | BesoinIntellix | Déjà couvert | Besoin Intelix | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinLigneMobile` | BesoinLigneMobile | Déjà couvert | Besoin SIM / ligne (distinct du téléphone) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinPCPortable` | BesoinPCPortable | Couvert autrement, sans perte | Besoin PC + préférence fixe / portable / sans préférence | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinsValides` | BesoinsValides | Remplacé par une décision métier | Pas d'étape « Valider les besoins » : IT et Formation voient l'annonce immédiatement | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinsValidesParEmail` | BesoinsValidesParEmail | Remplacé par une décision métier | Idem (journal : auteur de chaque révision de besoin) | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinVehicule` | BesoinVehicule | Déjà couvert | Besoin véhicule (tâche RH) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `BesoinXena` | BesoinXena | Déjà couvert | Besoin Xena | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
 | `CleCreation` | CleCreation | Couvert autrement, sans perte | Clé d'idempotence de la commande (aucune double création) | — | **Non reprise** : Clé technique de l'ancienne application |
-| `CommentaireBesoins` | CommentaireBesoins | Couvert autrement, sans perte | Précision par besoin (suivable besoin par besoin) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Commentaires` | Commentaires | Déjà couvert | Note RH du dossier (RH et ADMIN seulement) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DateEffet` | DateEffet | Déjà couvert | Date d'effet du dossier | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DateValidationBesoins` | DateValidationBesoins | Remplacé par une décision métier | Idem (journal horodaté des révisions) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DemandeurEmail` | DemandeurEmail | Couvert autrement, sans perte | Auteur du dossier (compte nominatif) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DemandeurNom` | DemandeurNom | Couvert autrement, sans perte | Auteur du dossier (compte nominatif) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DepartementCible` | DepartementCible | Déjà couvert | Département à l'arrivée / département cible (mutation) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Employe` | Employe | Déjà couvert | Dossier rattaché à la fiche (jamais de seconde fiche) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `FonctionCible` | FonctionCible | Déjà couvert | Poste prévu (arrivée) / poste cible (mutation) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `FormationsRequises` | FormationsRequises | Déjà couvert | Sessions de formation du dossier | RH (demande), FORMATION (réalisation) | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `ManagerCible` | ManagerCible | Déjà couvert | Manager à l'arrivée / manager cible (mutation) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `MaterielRequis` | MaterielRequis | Déjà couvert | Besoins d'équipement distincts avec quantités (PC, écran, imprimante…) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `MessageriePrevue` | MessageriePrevue | Remplacé par une décision métier | Plateforme choisie par l'IT au moment de créer l'adresse | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `ProfilCible` | ProfilCible | Déjà couvert | Profil choisi à l'annonce / profil cible (mutation) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Progression` | Progression | Couvert autrement, sans perte | Calculée : actions ouvertes, quantités remises | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `SiteCible` | SiteCible | Déjà couvert | Site prévu (arrivée) / site cible (mutation) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `SituationApresJSON` | SituationApresJSON | Couvert autrement, sans perte (lot suivant, à recetter) | Mutation : cible et écarts « conserver, ajouter, reprendre, vérifier » | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `SituationAvantJSON` | SituationAvantJSON | Couvert autrement, sans perte (lot suivant, à recetter) | Mutation : photographie figée de la situation | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Statut` | Statut | Couvert autrement, sans perte | Ouvert, clos, annulé ; attente portée par la tâche | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `TachesEnRetard` | TachesEnRetard | Couvert autrement, sans perte | Calculé : états des lieux, tâches en retard | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Title` | Reference | Couvert autrement, sans perte | Référence lisible ONB-, DEM-, MUT-, OFF-00000 | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `TypeDossier` | TypeDossier | Déjà couvert | Type du dossier (arrivée, mutation, départ, demande) | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
+| `CommentaireBesoins` | CommentaireBesoins | Couvert autrement, sans perte | Précision par besoin (suivable besoin par besoin) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Commentaires` | Commentaires | Déjà couvert | Note RH du dossier (RH et ADMIN seulement) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DateEffet` | DateEffet | Déjà couvert | Date d'effet du dossier | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DateValidationBesoins` | DateValidationBesoins | Remplacé par une décision métier | Idem (journal horodaté des révisions) | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DemandeurEmail` | DemandeurEmail | Couvert autrement, sans perte | Auteur du dossier (compte nominatif) | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DemandeurNom` | DemandeurNom | Couvert autrement, sans perte | Auteur du dossier (compte nominatif) | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DepartementCible` | DepartementCible | Déjà couvert | Département à l'arrivée / département cible (mutation) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Employe` | Employe | Déjà couvert | Dossier rattaché à la fiche (jamais de seconde fiche) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `FonctionCible` | FonctionCible | Déjà couvert | Poste prévu (arrivée) / poste cible (mutation) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `FormationsRequises` | FormationsRequises | Déjà couvert | Sessions de formation du dossier | RH (demande), FORMATION (réalisation) | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `ManagerCible` | ManagerCible | Déjà couvert | Manager à l'arrivée / manager cible (mutation) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `MaterielRequis` | MaterielRequis | Déjà couvert | Besoins d'équipement distincts avec quantités (PC, écran, imprimante…) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `MessageriePrevue` | MessageriePrevue | Remplacé par une décision métier | Plateforme choisie par l'IT au moment de créer l'adresse | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `ProfilCible` | ProfilCible | Déjà couvert | Profil choisi à l'annonce / profil cible (mutation) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Progression` | Progression | Couvert autrement, sans perte | Calculée : actions ouvertes, quantités remises | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `SiteCible` | SiteCible | Déjà couvert | Site prévu (arrivée) / site cible (mutation) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `SituationApresJSON` | SituationApresJSON | Couvert autrement, sans perte (lot suivant, à recetter) | Mutation : cible et écarts « conserver, ajouter, reprendre, vérifier » | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `SituationAvantJSON` | SituationAvantJSON | Couvert autrement, sans perte (lot suivant, à recetter) | Mutation : photographie figée de la situation | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Statut` | Statut | Couvert autrement, sans perte | Ouvert, clos, annulé ; attente portée par la tâche | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `TachesEnRetard` | TachesEnRetard | Couvert autrement, sans perte | Calculé : états des lieux, tâches en retard | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Title` | Reference | Couvert autrement, sans perte | Référence lisible ONB-, DEM-, MUT-, OFF-00000 | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `TypeDossier` | TypeDossier | Déjà couvert | Type du dossier (arrivée, mutation, départ, demande) | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
 | `VersionProcessus` | VersionProcessus | Remplacé par une décision métier | Version des migrations de l'application | — | **Non reprise** : Version technique de l'ancienne application |
-| `WilayasCibles` | WilayasCibles | Partiellement couvert | Wilayas à l'arrivée : oui ; wilayas cibles d'une mutation : à livrer | RH, ADMIN | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
+| `WilayasCibles` | WilayasCibles | Déjà couvert | Wilayas à l'arrivée ; wilayas cibles d'une mutation, appliquées à la date d'effet | RH, ADMIN | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
 
 ## Formations (10 champs)
 
@@ -215,14 +215,14 @@ Répartition :
 
 | Champ | Libellé | Nouvelles saisies | Où le saisir / le consulter | Qui modifie | Valeur ancienne après reprise |
 |---|---|---|---|---|---|
-| `ActionTache` | ActionTache | Couvert autrement, sans perte | Action déduite du besoin (remise, compte, carte, véhicule, restitution, coupure) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Condition` | Condition | Couvert autrement, sans perte | Seul « Oui » crée une tâche (À préciser n'invente rien) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DelaiJours` | DelaiJours | À livrer | Échéance = date d'effet ; délai paramétrable à livrer | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Equipe` | Equipe | Déjà couvert | Équipe responsable : routage besoin → équipe | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Instructions` | Instructions | À livrer | Instructions par modèle de tâche : à livrer | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `OrdreTache` | OrdreTache | Remplacé par une décision métier | Pas d'ordre imposé : Formation n'attend pas l'IT ; ordre d'affichage à livrer | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Title` | Titre | Partiellement couvert | Intitulé de tâche généré par besoin (non paramétrable) | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `TypeDossier` | TypeDossier | Partiellement couvert | Tâches générées selon le type de dossier | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
+| `ActionTache` | ActionTache | Couvert autrement, sans perte | Action déduite du besoin (remise, compte, carte, véhicule, restitution, coupure) | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Condition` | Condition | Couvert autrement, sans perte | Seul « Oui » crée une tâche (À préciser n'invente rien) | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DelaiJours` | DelaiJours | Déjà couvert | Administration → Modèles de tâches : échéance = date d'effet + délai en jours | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Equipe` | Equipe | Déjà couvert | Équipe responsable : routage besoin → équipe | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Instructions` | Instructions | Déjà couvert | Administration → Modèles de tâches : consignes affichées sur la tâche | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `OrdreTache` | OrdreTache | Remplacé par une décision métier | Pas d'ordre imposé : Formation n'attend pas l'IT ; ordre d'affichage réglable dans Modèles de tâches | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Title` | Titre | Déjà couvert | Intitulé généré par besoin, remplaçable dans Administration → Modèles de tâches | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `TypeDossier` | TypeDossier | Partiellement couvert | Tâches générées selon le type de dossier | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
 
 ## Personnel (25 champs)
 
@@ -278,21 +278,21 @@ Répartition :
 
 | Champ | Libellé | Nouvelles saisies | Où le saisir / le consulter | Qui modifie | Valeur ancienne après reprise |
 |---|---|---|---|---|---|
-| `ActionTache` | ActionTache | Couvert autrement, sans perte | Besoin ou contrôle de sortie lié | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `AssigneEmail` | AssigneEmail | Couvert autrement, sans perte | Responsable (compte nominatif) | Équipe | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `AssigneNom` | AssigneNom | Couvert autrement, sans perte | Responsable : prise en charge atomique | Équipe | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Commentaire` | Commentaire | Couvert autrement, sans perte | Observation de fin, raison d'attente | Équipe | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `DateRealisation` | DateRealisation | Déjà couvert | Date de fin, avec la preuve (remis, déjà détenu, exception, réalisé) | Équipe | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Dossier` | Dossier | Déjà couvert | Tâche rattachée à son dossier | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Echeance` | Echeance | Déjà couvert | Échéance de la tâche | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Employe` | Employe | Déjà couvert | Via le dossier | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Equipe` | Equipe | Déjà couvert | Équipe de la tâche (file « Mon travail ») | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Instructions` | Instructions | À livrer | Instructions venant du modèle : à livrer | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `OrdreTache` | OrdreTache | Remplacé par une décision métier | Aucun ordre imposé entre équipes | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `RealiseeParEmail` | RealiseeParEmail | Déjà couvert | Auteur de la fin de tâche | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `RealiseeParNom` | RealiseeParNom | Déjà couvert | Auteur de la fin de tâche | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Statut` | Statut | Couvert autrement, sans perte | À prendre, en cours, en attente, terminée, annulée ; « N/A » = exception motivée | Équipe responsable | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
-| `Title` | Titre | Déjà couvert | Tâche du dossier | — | **Consultable uniquement dans SharePoint** : Dossiers, tâches et modèles non recréés (hypothèse H1) |
+| `ActionTache` | ActionTache | Couvert autrement, sans perte | Besoin ou contrôle de sortie lié | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `AssigneEmail` | AssigneEmail | Couvert autrement, sans perte | Responsable (compte nominatif) | Équipe | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `AssigneNom` | AssigneNom | Couvert autrement, sans perte | Responsable : prise en charge atomique | Équipe | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Commentaire` | Commentaire | Couvert autrement, sans perte | Observation de fin, raison d'attente | Équipe | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `DateRealisation` | DateRealisation | Déjà couvert | Date de fin, avec la preuve (remis, déjà détenu, exception, réalisé) | Équipe | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Dossier` | Dossier | Déjà couvert | Tâche rattachée à son dossier | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Echeance` | Echeance | Déjà couvert | Échéance de la tâche | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Employe` | Employe | Déjà couvert | Via le dossier | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Equipe` | Equipe | Déjà couvert | Équipe de la tâche (file « Mon travail ») | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Instructions` | Instructions | Déjà couvert | Consignes recopiées du modèle à la création de la tâche | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `OrdreTache` | OrdreTache | Remplacé par une décision métier | Aucun ordre imposé entre équipes | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `RealiseeParEmail` | RealiseeParEmail | Déjà couvert | Auteur de la fin de tâche | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `RealiseeParNom` | RealiseeParNom | Déjà couvert | Auteur de la fin de tâche | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Statut` | Statut | Couvert autrement, sans perte | À prendre, en cours, en attente, terminée, annulée ; « N/A » = exception motivée | Équipe responsable | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
+| `Title` | Titre | Déjà couvert | Tâche du dossier | — | **Non reprise (essais)** : les dossiers, tâches et modèles de l'ancienne application n'étaient que des essais |
 
 ## UtilisateursApp (5 champs)
 
